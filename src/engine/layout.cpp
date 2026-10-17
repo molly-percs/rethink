@@ -113,6 +113,7 @@ Drawing layoutWaterfall(const DataItem& item, const ChartOptions& o, Box b) {
             rect.fill = s.fill ? Color::rgbColor(*s.fill) : seriesColor(s.row);
             rect.role = std::format("segment r{} c{}", s.row, j + 1);
             rect.flags = s.computed ? "e" : s.value < 0 ? "neg" : "pos";
+            rect.value = s.value;
             d.prims.push_back(rect);
 
             if (!o.segmentLabels) continue;
@@ -188,6 +189,28 @@ std::wstring formatValue(double value, int decimals, const std::wstring& decimal
     if (s == L"-0" || s.starts_with(L"-0.") && std::all_of(s.begin() + 3, s.end(), [](wchar_t c) { return c == L'0'; })) s.erase(0, 1);
     if (const auto dot = s.find(L'.'); dot != std::wstring::npos) s.replace(dot, 1, decimalSeparator);
     return percent ? s + L"%" : s;
+}
+
+bool samePrim(const Prim& a, const Prim& b) {
+    auto sameColor = [](const Color& x, const Color& y) { return x.kind == y.kind && x.scheme == y.scheme && x.rgb == y.rgb; };
+    return a.kind == b.kind && a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h && a.text == b.text && a.role == b.role &&
+           a.flags == b.flags && a.value == b.value && sameColor(a.fill, b.fill) && sameColor(a.stroke, b.stroke) &&
+           sameColor(a.textColor, b.textColor) && a.fontPt == b.fontPt && a.strokePt == b.strokePt;
+}
+
+int stepDecimals(const Cell& cell, const ChartOptions& options) {
+    if (options.decimals) return *options.decimals;
+    const std::string s = std::format("{}", cell.number);
+    if (s.find_first_of("eE") != std::string::npos) return 0;
+    const auto dot = s.find('.');
+    return dot == std::string::npos ? 0 : std::min(4, static_cast<int>(s.size() - dot - 1));
+}
+
+double dragValue(double startValue, double pixels, double pixelsPerUnit, int decimals) {
+    const double scale = std::pow(10.0, decimals);
+    const double raw = startValue + (pixelsPerUnit > 0 ? pixels / pixelsPerUnit : 0);
+    const double rounded = std::round(raw * scale) / scale;
+    return rounded == 0.0 ? 0.0 : rounded;  // kein -0
 }
 
 int chartDecimals(const DataItem& item, const ChartOptions& options) {

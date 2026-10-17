@@ -53,7 +53,11 @@ struct Prim {
     Align align = Align::Center;
     std::string role;   // eindeutiger Rollenname, z. B. "segment r1 c3"; Formname im Element
     std::string flags;  // Segmente: "pos", "neg" oder "e" (berechnet) – für Griffe im Add-in
+    double value = 0;   // Segmente: dargestellter Wert (für den Maßstab beim Ziehen)
 };
+
+// Gleich gezeichnet? (Geometrie, Text, Farben, Kennung) – für Aktualisierungen nur geänderter Formen.
+bool samePrim(const Prim& a, const Prim& b);
 
 struct Drawing {
     Box bounds;
@@ -92,6 +96,14 @@ Drawing layoutChart(const DataItem& item, const ChartOptions& options, Box bound
 // Nachkommastellen der Beschriftungen (fest aus den Optionen oder automatisch 0–2);
 // das Add-in nutzt sie als Schrittweite der ▲▼-Griffe (10^-Stellen).
 int chartDecimals(const DataItem& item, const ChartOptions& options);
+
+// Schrittweite beim Ändern eines einzelnen Werts (▲▼, Ziehen): so viele Nachkommastellen, wie der Wert selbst
+// eingegeben wurde (12 → 1er-Schritte, 12,5 → 0,1); eine feste "decimals"-Option hat Vorrang. Höchstens 4.
+int stepDecimals(const Cell& cell, const ChartOptions& options);
+
+// Wert beim Ziehen: Startwert + Mausweg (in Pixeln, positiv = Richtung wachsender Werte) / Pixel je Einheit,
+// gerundet auf die Schrittweite. Der Maßstab wird zu Beginn eingefroren.
+double dragValue(double startValue, double pixels, double pixelsPerUnit, int decimals);
 
 // Zahl mit festen Nachkommastellen und gewähltem Dezimaltrennzeichen.
 std::wstring formatValue(double value, int decimals, const std::wstring& decimalSeparator, bool percent);

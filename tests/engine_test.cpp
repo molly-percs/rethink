@@ -177,11 +177,26 @@ void testCellInput() {
     check(displayCell(parseCellInput(L"2024-03-01", de), de) == L"01.03.2024", "Anzeige: Datum");
 }
 
+void testStepAndDrag() {
+    ChartOptions o;
+    check(stepDecimals(num(45), o) == 0, "Schritt: ganze Zahl → 1er-Schritte");
+    check(stepDecimals(num(-12.5), o) == 1, "Schritt: eine Nachkommastelle → 0,1");
+    check(stepDecimals(num(3.25), o) == 2, "Schritt: zwei Nachkommastellen → 0,01");
+    o.decimals = 0;
+    check(stepDecimals(num(3.25), o) == 0, "Schritt: feste decimals-Option hat Vorrang");
+    check(approx(dragValue(40, 25, 5, 0), 45), "Ziehen: 25 px bei 5 px/Einheit → +5");
+    check(approx(dragValue(40, 27, 5, 0), 45) && approx(dragValue(40, 28, 5, 0), 46), "Ziehen: rundet auf ganze Schritte");
+    check(approx(dragValue(12.5, -7, 10, 1), 11.8), "Ziehen: Nachkommastelle bleibt (12,5 → 11,8)");
+    check(approx(dragValue(-3, 50, 10, 0), 2), "Ziehen: über die Null (−3 → 2)");
+    check(dragValue(0.2, -2, 10, 0) == 0.0 && !std::signbit(dragValue(0.2, -2, 10, 0)), "Ziehen: kein −0");
+}
+
 }  // namespace
 
 int main() {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     testCellInput();
+    testStepAndDrag();
     testDatasheetRoundtrip();
     testEAtEnd();
     testEMid();

@@ -1,181 +1,135 @@
-# rethink 0.2
+# rethink
 
-`rethink` erzeugt PowerPoint-Präsentationen aus Daten im `.ppttc`-JSON-Format. Das ist das dokumentierte Austauschformat der think-cell-Automatisierung.
+**rethink** is a clean-room PowerPoint charting add-in and presentation generator for Windows, written in C++20.
+It follows the *behaviour* of think-cell (charts that are driven by a datasheet and recalculate automatically) without using any of its code, identifiers or artwork.
 
-Es handelt sich um einen **eigenständigen Clean-Room-Nachbau**. Grundlage waren nur das öffentlich dokumentierte Dateiformat und das beschriebene Verhalten. Es wurde kein Code dekompiliert oder übernommen, und rethink verwendet keine Kennungen, Namen oder Markenzeichen von think-cell. Die Spezifikation der Diagrammfunktionen und ihr Stand stehen in [docs/charting-ledger.md](docs/charting-ledger.md).
+It consists of three parts that share one core:
 
-> Status: Arbeitsstand in Entwicklung (Windows, PowerPoint/Microsoft 365). Fertige Binärdateien liegen nicht im Repository; siehe „Bauen“.
+| Part | What it does |
+|---|---|
+| **PowerPoint add-in** (`bin\rethink-addin.dll`) | Adds a **rethink** ribbon tab. Insert a waterfall chart, edit its data in a built-in datasheet, drag ▲▼ handles on the bars to change values, see a blue selection glow on rethink charts. |
+| **Command line tool** (`bin\rethink.exe`) | Builds presentations from `.ppttc` JSON data (the documented think-cell automation format): fills text fields, native PowerPoint charts and rethink charts in a template. |
+| **Layout engine** (`src/engine`) | Pure C++ (no COM, no XML). Computes chart geometry, labels, waterfall arithmetic (`e` = computed total) and the data table below a chart. Both the add-in and the CLI render its output. |
 
-## Schnell ausprobieren
+> Status: work in progress (Windows 11, PowerPoint / Microsoft 365). Only the **waterfall** chart is implemented so far; see [docs/charting-ledger.md](docs/charting-ledger.md) for the full feature list and its status, and [HANDOFF.md](HANDOFF.md) for how to continue development.
+
+---
+
+## Quick start (try it in 5 minutes)
+
+### 1. Requirements
+- Windows 10/11 (x64) with **PowerPoint** (Microsoft 365 / Office 2016+, 64-bit)
+- **Visual Studio 2022 Build Tools** (MSVC + CMake) and **Windows SDK ≥ 10.0.22621**
+- No other libraries: rethink uses only Windows APIs (OPC packaging, MSXML 6, `Windows.Data.Json`, URLMon).
+
+### 2. Build
+Open a *Developer Command Prompt for VS 2022* (or run `vcvars64.bat`) in the repository folder:
+
+```bat
+cmake -S . -B %TEMP%\rtk -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
+cmake --build %TEMP%\rtk
+mkdir bin
+copy %TEMP%\rtk\rethink.exe bin\
+copy %TEMP%\rtk\rethink-addin.dll bin\
+```
+
+A short build folder (`%TEMP%\rtk`) avoids MSBuild's 260-character path limit when the repository lives in a deep path.
+
+### 3. Register the add-in (current user only, no admin rights)
+Close PowerPoint, then in PowerShell:
 
 ```powershell
-.\ausprobieren.ps1                         # baut samples\sample.ppttc und öffnet das Ergebnis in PowerPoint
-.\ausprobieren.ps1 -Ppttc meine-daten.ppttc
+.\scripts\register.ps1      # registers bin\rethink-addin.dll under HKCU
 ```
 
-Werte ändern: `samples\sample.ppttc` in einem Editor öffnen, Zahlen oder Texte anpassen, speichern und das Skript erneut starten.
+Start PowerPoint → tab **rethink** appears. Remove it again with `.\scripts\unregister.ps1`.
 
-## Aufruf
+### 4. Try it
+1. **rethink › Diagramme › Wasserfall einfügen** inserts a waterfall chart with sample data and a data table.
+2. Click the chart: a thin **blue glow** with a tiny “rethink chart” label appears, plus **▲▼ handles** on every bar and a **table icon** at the bottom right.
+3. Click ▲ / ▼ on a bar (Shift = 10× step): the value changes, connectors and totals (`e`) recalculate instantly.
+4. Click the **table icon** (or double-click the chart): the built-in **datasheet** opens. Type values (`12,5`, `48%`, `e`, dates), paste from Excel with Ctrl+V, right-click for rows/columns, percent and cell colour. Every entry updates the chart immediately; just close the window when done.
 
+### 5. Try the command line tool
+```powershell
+.\ausprobieren.ps1            # builds samples\sample.ppttc and opens the result in PowerPoint
+bin\rethink.exe build tests\waterfall.ppttc -o tests\out\waterfall.pptx
 ```
-rethink build <eingabe.ppttc> [-o <ausgabe.pptx>]
-rethink --version
-```
+(`tests\waterfall.ppttc` needs the template from `tests\make-waterfall-template.ps1`.)
 
-- Ohne `-o` entsteht `<eingabe>.pptx` neben der Eingabedatei.
-- Fehlende Ausgabeordner werden angelegt.
-- Exit-Codes: `0` bedeutet Erfolg (Warnungen sind möglich), `1` falscher Aufruf, `2` ungültige Eingabe oder Vorlage, `3` unerwarteter Fehler.
+---
 
-## Was Phase 1 kann
+## The add-in in detail
 
-| Funktion | Verhalten |
+| Ribbon command | Effect |
 |---|---|
-| `.ppttc` lesen | Validiert das Format vollständig: `template`, `data[]`, `name`, `table`, Zelltypen `string`/`number`/`percentage`/`date`/`null`, `fill` als `#rrggbb` oder `rgb(r,g,b)`. Fehlermeldungen nennen den JSON-Pfad, z. B. `[0].data[3].table[1][2]`. |
-| Vorlagen | Lokaler Pfad (relativ zur `.ppttc`-Datei) oder `http(s)`-URL. |
-| Folien vervielfältigen | Jeder Eintrag erzeugt eine Kopie **aller** Vorlagenfolien. Diagramme, Einbettungen und Tags werden mitkopiert, Layouts, Master und Bilder geteilt, Notizen weggelassen. |
-| Textfelder | Formen werden über den **Formnamen** (Auswahlbereich, Alt+F10) oder den **Alternativtext `rethink:<Name>`** gefunden. Außerdem werden die **Textfelder in think-cell-Vorlagen** erkannt (kompatibel). Die Formatierung des ersten Textlaufs bleibt erhalten, `\n` erzeugt neue Absätze. |
-| Diagramme | Native PowerPoint-Diagramme (Säule, Linie, Fläche, Kreis; Balken und Ring ungetestet), gleiche Namensregel wie bei Textfeldern. Zeile 0 enthält die Kategorien, jede weitere Zeile eine Reihe. Eine **leere Zeile `[]` überspringt eine Farbe** des Füllschemas. `percentage` wird mit dem Format `0%` geschrieben, `fill` färbt einzelne Datenpunkte. |
-| Datumskategorien | Lauter 1. Januar → `2024`; lauter Monatserste → `2024-03`; sonst das Datum wie angegeben. |
-| Datenblatt | Jedes Diagramm bekommt eine neue eingebettete XLSX-Datei mit denselben Werten. So zeigt „Daten bearbeiten“ in PowerPoint die richtigen Zahlen. |
-| Ergebnis | Eine normale PPTX-Datei, die **ohne Add-in** geöffnet und bearbeitet werden kann. |
+| **Diagramme › Wasserfall einfügen** | Inserts a rethink waterfall (sample data, data table). |
+| **Diagramme › Datenblatt öffnen** | Opens the built-in datasheet of the selected rethink chart (same as the table icon or a double-click). |
+| Erzeugen › Aus .ppttc erzeugen… | Builds a presentation from a `.ppttc` file (like the CLI). |
+| Elemente › Diagramm einfügen / Elementname setzen | Inserts a native chart / names shapes so `.ppttc` data can fill them. |
 
-## Gezeichnete Diagramme (think-cell-Stil)
+- **Selection overlay:** a separate transparent window above PowerPoint (the document is never modified). Only the handles and the table icon accept clicks; everything else passes through to PowerPoint.
+- **In-place updates:** each shape of a chart is named after its role (`segment r1 c3`, `connector c2`, …). Value changes move/resize the existing shapes instead of redrawing them, so your own formatting (e.g. a recoloured bar) survives. A ▲ click takes ~35 ms.
+- **Resizing** the chart with the mouse re-lays it out after you release the button.
+- **Data** lives inside the chart (shape tag `RETHINK_MODEL`, JSON) and travels with the presentation.
+- **Excel as an alternative:** right-click in the datasheet → *In Excel bearbeiten* opens the data in a private Excel instance; edits apply live and closing never asks to save.
 
-Bestimmte Diagramme kann PowerPoint nativ nicht darstellen: Wasserfälle mit `e`, eine Datentabelle unter dem Diagramm, später Mekko, CAGR-Pfeile, Gantt. Diese zeichnet rethink selbst als **Formengruppe**. Ein eigener Layout-Kern (`src/engine/`) berechnet die Geometrie.
+## `.ppttc` data and the `"chart"` extension
 
-Dafür bekommt ein Dateneintrag ein zusätzliches `"chart"`-Objekt. Der gleichnamige **Platzhalter** auf der Folie, etwa ein Rechteck namens `Bridge`, wird dann durch das Diagramm ersetzt und gibt Position und Größe vor:
+The CLI reads the JSON format documented for think-cell automation (`template`, `data[]`, `name`, `table`, cells with `string` / `number` / `percentage` / `date`, optional `fill`). Errors name the JSON path, e.g. `[0].data[3].table[1][2]`.
+
+Shapes are found by their **name** (selection pane) or alt text `rethink:<name>`. Text fields of think-cell templates are recognised as well.
+
+rethink adds an optional **`"chart"`** object to draw its own charts into a placeholder shape of the same name:
 
 ```json
 {
   "name": "Bridge",
   "chart": { "type": "waterfall", "datatable": true, "tableRows": [2] },
   "table": [
-    [null, {"string":"EBIT 2024"}, {"string":"Volumen"}, {"string":"Kosten"}, {"string":"EBIT 2025"}],
+    [null, {"string":"EBIT 2024"}, {"string":"Volume"}, {"string":"Costs"}, {"string":"EBIT 2025"}],
     [{"string":"EBIT"}, {"number":120}, {"number":35}, {"number":-28}, {"string":"e"}],
-    [{"string":"Marge"}, {"percentage":8.1}, null, null, {"percentage":8.7}]
+    [{"string":"Margin"}, {"percentage":8.1}, null, null, {"percentage":8.7}]
   ]
 }
 ```
 
-| Schlüssel in `chart` | Bedeutung (Standard) |
+| `chart` key | Meaning (default) |
 |---|---|
-| `type` | `"waterfall"` (weitere Typen siehe [docs/charting-ledger.md](docs/charting-ledger.md)) |
-| `datatable` | Datentabelle unter dem Diagramm, Spalten an den Säulen ausgerichtet (`false`) |
-| `tableRows` | Zeilennummern aus `table`, die **nur** in der Tabelle stehen (`[]`) |
-| `labels` / `categories` / `connectors` | Segmentbeschriftungen, Kategoriebeschriftungen, Wasserfall-Verbinder (`true`) |
-| `decimals` | feste Nachkommastellen (automatisch 0–2) |
-| `fontSize`, `gap` | Schriftgröße in pt (12), Lücke relativ zur Säulenbreite (0.5) |
+| `type` | `"waterfall"` |
+| `datatable` | data table below the chart, columns aligned with the bars (`false`) |
+| `tableRows` | row indices of `table` shown only in the data table (`[]`) |
+| `labels` / `categories` / `connectors` | segment labels, category labels, waterfall connectors (`true`) |
+| `decimals` | fixed number of decimals (automatic 0–2) |
+| `fontSize`, `gap` | font size in pt (12), gap relative to bar width (0.5) |
 
-**Wasserfall:** Ein `{"string":"e"}` ist ein berechnetes Segment.
-- In einer späteren Spalte ist es eine Zwischen- oder Endsumme bis zur Basislinie.
-- In der ersten Spalte wird es rückwärts berechnet (absteigende Brücke).
-
-Mehrere Datenzeilen ergeben mehrere Segmente pro Säule, mit höchstens einem `e` je Säule.
-
-**Neu befüllen:** Das Diagramm speichert sein Modell im Tag `RETHINK_MODEL`. Ein späterer Lauf mit derselben Präsentation als Vorlage zeichnet es mit neuen Daten neu. `"chart"`-Angaben im neuen Eintrag überschreiben dabei nur die genannten Optionen.
-
-Welche Diagrammfunktionen schon fertig sind und welche noch offen, zeigt **[docs/charting-ledger.md](docs/charting-ledger.md)**.
-
-## PowerPoint-Add-in (Menüband „rethink“)
-
-Einrichten: `scripts\register.ps1` meldet `bin\rethink-addin.dll` für den aktuellen Benutzer an (nur HKCU). Danach PowerPoint neu starten. Entfernen: `scripts\unregister.ps1`.
-
-| Gruppe / Befehl | Wirkung |
-|---|---|
-| **Diagramme › Wasserfall einfügen** | Fügt auf der aktuellen Folie einen rethink-Wasserfall mit Beispieldaten und Datentabelle ein (ohne weitere Fenster). |
-| **Diagramme › Datenblatt öffnen** | Öffnet das eingebaute Datenblatt des ausgewählten rethink-Diagramms, ebenso das **Tabellen-Symbol unten rechts** am Diagramm oder ein **Doppelklick**. |
-| Erzeugen › Aus .ppttc erzeugen… | Präsentation aus einer `.ppttc`-Datei (wie die Kommandozeile) |
-| Elemente › Diagramm einfügen / Elementname setzen | natives Diagramm einfügen bzw. Formen für `.ppttc` benennen |
-
-**Am ausgewählten Diagramm** zeichnet das Add-in eine Überlagerung. Sie verändert das Dokument nicht:
-- ein feiner **blauer Leuchtrahmen** mit dem winzigen Etikett „rethink chart“
-- **▲▼-Pfeile** an jedem Balken. Ein Klick ändert den Wert um einen Schritt in der Genauigkeit der Beschriftung (1, 0,1 …), mit gedrückter Umschalttaste um den zehnfachen Schritt. Verbinder und `e`-Summen rechnen sofort mit. Berechnete `e`-Balken haben keine Pfeile.
-- das **Datenblatt-Symbol** rechts unten
-
-**Eingebautes Datenblatt** (Tabellenkalkulations-Look neben dem Diagramm):
-- **Eingabe:** direkt in die Zelle tippen, Enter, Tab oder Pfeiltasten übernehmen.
-  - Zahlen mit Komma (`12,5`), Prozent (`48%`), `e` für eine berechnete Summe, Datum (`01.03.2024`)
-- **Strg+C / Strg+V** kopiert und fügt tabulatorgetrennt ein, auch aus Excel. Dazu gibt es Strg+Z und Entf.
-- **Rechtsklick:** Zeilen und Spalten einfügen oder löschen, Prozent ein/aus, Zellfarbe (wird zur Segmentfarbe), „In Excel bearbeiten“
-- **Jede Eingabe** zeichnet das Diagramm sofort neu. Zum Beenden das Fenster einfach schließen, es gibt nichts zu speichern.
-
-**Alternativ in Excel:** Über das Rechtsklick-Menü öffnet sich das Datenblatt in einer eigenen Excel-Instanz. Änderungen werden ohne Speichern übernommen. Beim Schließen übernimmt rethink alles, auch Zellfarben, ohne Rückfrage, und beendet Excel danach.
-
-**Bearbeiten in der Grafik:**
-- **Wertänderungen:** Formen werden an Ort und Stelle angepasst. Eigene Formatierungen wie Segmentfarbe oder Schrift bleiben erhalten.
-- **Größe:** Ändert man sie per Maus, ordnet rethink das Diagramm nach dem Loslassen neu an.
-- **Speicherort der Daten:** im Element selbst (Tag `RETHINK_MODEL`), sie reisen mit der Präsentation.
-
-Mit dem Add-in eingefügte und per Kommandozeile erzeugte Diagramme sind dasselbe Format: Beide lassen sich hier bearbeiten und über `.ppttc` neu befüllen.
-
-## Grenzen (bewusst)
-
-- **Eine Vorlage pro `.ppttc`-Datei.** Das Mischen verschiedener Vorlagen (mit unterschiedlichen Mastern) ist für eine spätere Phase vorgesehen.
-- **Diagramme in think-cell-Vorlagen** werden nicht gefüllt. Ihre Namen liegen in einem proprietären Datenobjekt, rethink gibt dafür eine Warnung aus. Abhilfe: das Diagramm im Auswahlbereich umbenennen. Die von think-cell gezeichneten Beschriftungen aktualisiert rethink dann aber nicht.
-- **Kopierte think-cell-Folien** behalten die think-cell-Formen samt identischer Kennungen und eine eigene Kopie des versteckten Datenobjekts. In PowerPoint öffnen sie sich einwandfrei. Wie sie sich bei aktivem think-cell verhalten, ist **nicht getestet**. Die Kopien sind nicht als weiter bearbeitbare think-cell-Elemente zu betrachten.
-- **Punkt- und Blasendiagramme**, Gantt-Diagramme, Harvey Balls, Checkboxen, die Zeile `100%=` und Tabellen werden in Phase 1 nicht unterstützt.
-- Text- und Datumswerte in Datenzellen von Diagrammen werden mit einer Warnung ignoriert.
-- Die Farben aus `fill` werden nicht in die eingebettete Arbeitsmappe übernommen.
-- PowerPoint-Eigenheit: Hat ein Diagramm **genau eine Reihe** und einzeln eingefärbte Punkte, listet die Legende die Kategorien statt des Reihennamens.
-
-## Bauen
-
-Benötigt werden **Visual Studio 2022 Build Tools** (MSVC, CMake) und das **Windows SDK ≥ 10.0.22621**. Weitere Bibliotheken braucht es nicht: rethink nutzt die OPC Packaging API, MSXML 6, `Windows.Data.Json` (C++/WinRT) und URLMon.
-
-```bat
-call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-cmake -S . -B %TEMP%\rtk -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
-cmake --build %TEMP%\rtk
-```
-
-Hinweis: Liegt das Projekt in einem sehr tiefen Pfad, scheitert der Visual-Studio-Generator am 260-Zeichen-Limit von MSBuild. Deshalb wird hier NMake mit einem kurzen Build-Ordner verwendet. Eine fertige Datei liegt unter `bin/rethink.exe`.
+**Waterfall semantics:** `{"string":"e"}` is a computed segment – a (sub)total down to the baseline; in the first column it is computed backwards (build-down bridge). Several data rows give several segments per column; at most one `e` per column.
 
 ## Tests
 
 ```powershell
-tests\run-tests.ps1 -Exe bin\rethink.exe                     # Validierung und Fehlermeldungen, ohne PowerPoint
-samples\make-template.ps1                                    # Testvorlage über PowerPoint erzeugen
-bin\rethink.exe build samples\sample.ppttc -o samples\out\sample.pptx
-tests\verify.ps1 -Pptx samples\out\sample.pptx -PngDir samples\out\png -ExpectSlides 2 -ExpectCharts 4
-tests\roundtrip.ps1 -Pptx samples\out\sample.pptx            # "Daten bearbeiten": Werte bleiben gleich
-tests\make-chart-types.ps1                                   # Linie, Fläche, Kreis
-bin\rethink.exe build tests\types.ppttc -o tests\out\types-filled.pptx
-tests\verify.ps1 -Pptx tests\out\types-filled.pptx -ExpectSlides 1 -ExpectCharts 3
-tests\url-test.ps1 -Exe bin\rethink.exe                      # Vorlage per http://localhost
-%TEMP%\rtk\engine_test.exe                                   # Layout-Kern + Datenblatt (56 Prüfungen)
-tests\make-waterfall-template.ps1; bin\rethink.exe build tests\waterfall.ppttc -o tests\out\waterfall.pptx
-tests\waterfall-addin-test.ps1                               # Add-in: Wasserfall, Excel-Datenblatt, Leuchtrahmen (18)
-tests\addin-test.ps1                                         # Add-in: Phase-2-Befehle (24)
+%TEMP%\rtk\engine_test.exe                         # layout engine + datasheet + input parsing (unit tests)
+tests\run-tests.ps1 -Exe bin\rethink.exe           # CLI validation and error messages
+tests\waterfall-addin-test.ps1                     # add-in end to end via PowerPoint automation (needs registration)
+tests\addin-test.ps1                               # older add-in commands
+%TEMP%\rtk\addin_selftest.exe %TEMP%\rtk\rethink-addin.dll   # add-in COM self test, no PowerPoint needed
 ```
 
-`verify.ps1`, `roundtrip.ps1` und die Vorlagen-Skripte steuern PowerPoint über COM. Wo ein Fenster nötig ist, öffnet sich PowerPoint bzw. Excel kurz minimiert. Läuft PowerPoint bereits, bleibt es geöffnet.
+PowerPoint automation tests open PowerPoint (and briefly Excel) on screen. Real mouse interaction (clicking/dragging handles, double-click, the look of the glow) cannot be automated and must be checked by hand.
 
-**Getestet (16.–17.10.2026, PowerPoint/Microsoft 365, Windows 11):**
-- gestapelte und gruppierte Säulen, Linie mit Markern, Fläche, Kreis
-- Leerzeilen-Farbverschiebung und `fill`
-- Prozent- und Datumskategorien
-- Vervielfältigung auf mehrere Folien
-- Textfelder, auch in think-cells Beispielvorlage
-- „Daten bearbeiten“ (alle 7 Diagramme unverändert)
-- Vorlage per URL
-- 8 Validierungsfälle
+## Repository layout
 
-Balkendiagramme (horizontal) und Ringdiagramme sind nicht eigens getestet.
-
-## Aufbau
-
-| Datei | Aufgabe |
+| Path | Content |
 |---|---|
-| `src/main.cpp` | Kommandozeile |
-| `src/build.cpp` | Ablauf: Vorlage laden, Folien kopieren, Elemente füllen, aufräumen, speichern |
-| `src/ppttc.*` | JSON lesen und validieren |
-| `src/opc.*` | PPTX/XLSX-Pakete: Teile, Beziehungen, tiefe Kopie, Entfernen verwaister Teile |
-| `src/xmldoc.*` | MSXML-DOM mit XPath und Fragment-Import |
-| `src/fill_text.*` | Textziele finden und füllen |
-| `src/fill_chart.*` | Diagrammreihen, Kategorien, Datenpunktfarben, eingebettete Arbeitsmappe |
-| `src/xlsx.*` | XLSX schreiben (Formate, Zellfarben) und von Excel gespeicherte Dateien lesen |
-| `src/engine/*` | Layout-Kern gezeichneter Diagramme (ohne COM/XML): Wasserfall-Arithmetik, Geometrie, Beschriftungen, Datentabelle |
-| `src/render_element.*` | OOXML-Ausgabe der Grundformen als Gruppe mit `RETHINK_MODEL` |
-| `src/datasheet.*` | Datenblatt ↔ Tabelle |
-| `addin/elements.*` | Add-in: Grundformen über das PowerPoint-Objektmodell, Einfügen, Datenblatt-Überwachung |
-| `addin/events.*`, `addin/overlay.*` | Auswahl- und Doppelklick-Ereignisse, blauer Leuchtrahmen |
+| `src/engine/` | layout engine: waterfall arithmetic, geometry, labels, data table |
+| `src/` | CLI and shared core: `.ppttc` parsing, OPC/XML packages, text/chart filling, OOXML rendering of rethink charts, XLSX read/write, datasheet conversion, cell input parsing |
+| `addin/` | PowerPoint COM add-in: ribbon, element rendering via the PowerPoint object model, selection overlay, events, built-in datasheet window, Excel link |
+| `scripts/` | register / unregister the add-in (HKCU) |
+| `tests/`, `samples/` | automated tests, sample data and templates |
+| `docs/charting-ledger.md` | feature list (spec from the documented behaviour) with status |
+
+## Clean-room note
+
+rethink was written from the publicly documented `.ppttc` format and the behaviour described in the user documentation. No code was decompiled or copied; no think-cell identifiers, names, icons or branding are used. Reverse-engineering notes about the original product are intentionally **not** part of this repository.
+
+Note: UI strings and most code comments are currently German; this README and the project documents are English.
