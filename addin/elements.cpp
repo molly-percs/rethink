@@ -22,6 +22,8 @@
 #include <set>
 #include <sstream>
 #include <thread>
+#include <tuple>
+#include <utility>
 
 namespace rethink::addin {
 namespace fs = std::filesystem;
@@ -209,40 +211,50 @@ ComPtr<IDispatch> drawElement(IDispatch* shapes, const Drawing& d, const std::ws
     return group;
 }
 
-// Passt die vorhandenen Formen an, wenn dieselben Rollen vorkommen. Farben werden nur gesetzt, wenn sich
-// die Vorgabe des Modells geändert hat – eigene Formatierungen bleiben so erhalten.
-bool updateInPlace(IDispatch* group, const Drawing& d) {
+// Passt eine vorhandene Form an ihre Grundform an. Farben werden nur gesetzt, wenn sich die Vorgabe des Modells
+// geändert hat – eigene Formatierungen bleiben so erhalten.
+void updateShape(IDispatch* shape, const Prim& p) {
+    setGeometry(shape, p);
+    if (p.kind == Prim::Kind::Rect) {
+        const auto sig = signature(p.fill);
+        if (tagValue(shape, kStyleTag) != sig) {
+            applyColor(disp::object(disp::object(shape, L"Fill").Get(), L"ForeColor").Get(), p.fill);
+            setTag(shape, kStyleTag, sig);
+        }
+        if (tagValue(shape, kSegmentTag) != widen(p.flags)) setTag(shape, kSegmentTag, widen(p.flags));
+    } else if (p.kind == Prim::Kind::Text) {
+        auto range = disp::object(disp::object(shape, L"TextFrame").Get(), L"TextRange");
+        if (disp::call(range.Get(), L"Text").str() != p.text) disp::put(range.Get(), L"Text", p.text);
+        const auto sig = signature(p.textColor);
+        if (tagValue(shape, kStyleTag) != sig) {
+            applyColor(disp::object(disp::object(range.Get(), L"Font").Get(), L"Color").Get(), p.textColor);
+            setTag(shape, kStyleTag, sig);
+        }
+    }
+}
+
+using RoleMap = std::map<std::wstring, ComPtr<IDispatch>>;
+
+// Formen der Gruppe nach Rolle; nullopt, wenn sie nicht genau zu den Grundformen passen.
+std::optional<RoleMap> shapesByRole(IDispatch* group, const Drawing& d) {
     auto items = disp::object(group, L"GroupItems");
     const long count = disp::call(items.Get(), L"Count").toLong();
-    if (count != static_cast<long>(d.prims.size())) return false;
-    std::map<std::wstring, ComPtr<IDispatch>> byRole;
+    if (count != static_cast<long>(d.prims.size())) return std::nullopt;
+    RoleMap byRole;
     for (long i = 1; i <= count; ++i) {
         auto shape = disp::object(items.Get(), L"Item", i);
         byRole[disp::call(shape.Get(), L"Name").str()] = shape;
     }
     for (auto& p : d.prims)
-        if (!byRole.contains(widen(p.role))) return false;
+        if (!byRole.contains(widen(p.role))) return std::nullopt;
+    return byRole;
+}
 
-    for (auto& p : d.prims) {
-        IDispatch* shape = byRole[widen(p.role)].Get();
-        setGeometry(shape, p);
-        if (p.kind == Prim::Kind::Rect) {
-            const auto sig = signature(p.fill);
-            if (tagValue(shape, kStyleTag) != sig) {
-                applyColor(disp::object(disp::object(shape, L"Fill").Get(), L"ForeColor").Get(), p.fill);
-                setTag(shape, kStyleTag, sig);
-            }
-            if (tagValue(shape, kSegmentTag) != widen(p.flags)) setTag(shape, kSegmentTag, widen(p.flags));
-        } else if (p.kind == Prim::Kind::Text) {
-            auto range = disp::object(disp::object(shape, L"TextFrame").Get(), L"TextRange");
-            if (disp::call(range.Get(), L"Text").str() != p.text) disp::put(range.Get(), L"Text", p.text);
-            const auto sig = signature(p.textColor);
-            if (tagValue(shape, kStyleTag) != sig) {
-                applyColor(disp::object(disp::object(range.Get(), L"Font").Get(), L"Color").Get(), p.textColor);
-                setTag(shape, kStyleTag, sig);
-            }
-        }
-    }
+// Passt die vorhandenen Formen an, wenn dieselben Rollen vorkommen.
+bool updateInPlace(IDispatch* group, const Drawing& d) {
+    auto byRole = shapesByRole(group, d);
+    if (!byRole) return false;
+    for (auto& p : d.prims) updateShape((*byRole)[widen(p.role)].Get(), p);
     return true;
 }
 
@@ -306,6 +318,12 @@ Box layoutBox(IDispatch* group) {
             emu(std::max(now.height - insetT - insetB, 10.0))};
 }
 
+// Layout-Rahmen und aktuellen Gruppenrahmen vermerken (Grundlage für layoutBox und relayoutIfResized).
+void storeLayout(IDispatch* group, const Box& b) {
+    const Rect g = rectOf(group);
+    setTag(group, kLayoutTag, std::format(L"{};{};{};{};{};{};{};{}", pt(b.x), pt(b.y), pt(b.w), pt(b.h), g.left, g.top, g.width, g.height));
+}
+
 // Zeichnet ein Element (neu oder an Ort und Stelle) und vermerkt Modell und Layout.
 ComPtr<IDispatch> renderElement(IDispatch* slide, ComPtr<IDispatch> group, const DataItem& item, Box box) {
     const Prepared prepared = prepare(item, box);
@@ -321,10 +339,7 @@ ComPtr<IDispatch> renderElement(IDispatch* slide, ComPtr<IDispatch> group, const
                 disp::call(group.Get(), L"ZOrder", 3L);  // msoSendBackward: alte Stapelposition
     }
     setTag(group.Get(), kModelTag, prepared.model);
-    const Rect g = rectOf(group.Get());
-    const Box& b = prepared.drawing.bounds;
-    setTag(group.Get(), kLayoutTag,
-           std::format(L"{};{};{};{};{};{};{};{}", pt(b.x), pt(b.y), pt(b.w), pt(b.h), g.left, g.top, g.width, g.height));
+    storeLayout(group.Get(), prepared.drawing.bounds);
     return group;
 }
 
@@ -912,6 +927,37 @@ ComPtr<IDispatch> datasheetWorkbook(IDispatch* app) {
 
 int applyDatasheets(IDispatch*) { return refreshAll(false); }
 
+namespace {
+
+// Zelle hinter einem Segment; wirft, wenn sie sich nicht direkt ändern lässt.
+Cell& valueCell(DataItem& item, int row, int column) {
+    if (row < 1 || static_cast<size_t>(row) >= item.table.size() || column < 1 || static_cast<size_t>(column) >= item.table[row].size())
+        throw Error("Dieses Segment gibt es nicht mehr.");
+    Cell& cell = item.table[row][column];
+    if (isComputedCell(cell)) throw Error("Dieses Segment wird aus „e“ berechnet und kann nicht direkt verändert werden.");
+    if (cell.kind != CellKind::Number && cell.kind != CellKind::Percentage) throw Error("Dieses Segment hat keinen Zahlenwert.");
+    return cell;
+}
+
+// Wert in die Zelle des offenen Excel-Datenblatts schreiben (Excel speichert Prozente als Anteil).
+void writeExcelCell(Sheet& s, int row, int column, const Cell& cell) {
+    try {
+        auto sheet = disp::object(disp::object(s.workbook.Get(), L"Worksheets").Get(), L"Item", 1L);
+        auto range = disp::object(sheet.Get(), L"Range", columnName(static_cast<size_t>(column)) + std::to_wstring(row + 1));
+        disp::put(range.Get(), L"Value2", cell.kind == CellKind::Percentage ? cell.number / 100.0 : cell.number);
+    } catch (const std::exception& e) {
+        if (isBusy(e)) throw Error("Excel ist gerade beschäftigt (Zelle im Bearbeitungsmodus?). Bitte die Zelle verlassen und erneut klicken.");
+        throw;
+    }
+}
+
+Sheet* openExcelSheet(IDispatch* element) {
+    Sheet* s = sheetFor(sheetKey(element));
+    return s && s->workbook && !s->closed ? s : nullptr;
+}
+
+}  // namespace
+
 void adjustSegment(IDispatch* app, int row, int column, int direction, bool large) {
     auto element = selectedElement(app);
     auto slide = disp::object(element.Get(), L"Parent");
@@ -919,37 +965,24 @@ void adjustSegment(IDispatch* app, int row, int column, int direction, bool larg
 
     struct Change {
         DataItem item;
-        double value = 0;
-        bool percent = false;
+        Cell cell;
     };
     const Change change = onWorker([&] {
         Change c;
         c.item = parseDataItemJson(stored);
-        if (row < 1 || static_cast<size_t>(row) >= c.item.table.size() || column < 1 ||
-            static_cast<size_t>(column) >= c.item.table[row].size())
-            throw Error("Dieses Segment gibt es nicht mehr.");
-        Cell& cell = c.item.table[row][column];
-        if (isComputedCell(cell)) throw Error("Dieses Segment wird aus „e“ berechnet und kann nicht direkt verändert werden.");
-        if (cell.kind != CellKind::Number && cell.kind != CellKind::Percentage) throw Error("Dieses Segment hat keinen Zahlenwert.");
-        const int decimals = chartDecimals(c.item, parseChartOptions(c.item.chartJson));
+        Cell& cell = valueCell(c.item, row, column);
+        // Schrittweite nach der Genauigkeit des Werts selbst (12 → 1, 12,5 → 0,1), nicht nach dem ganzen Diagramm
+        const int decimals = stepDecimals(cell, parseChartOptions(c.item.chartJson));
         const double scale = std::pow(10.0, decimals);
         const double step = (large ? 10.0 : 1.0) / scale;
         cell.number = std::round((cell.number + direction * step) * scale) / scale;
-        c.value = cell.number;
-        c.percent = cell.kind == CellKind::Percentage;
+        c.cell = cell;
         return c;
     });
 
     // Ist das Datenblatt offen, ist es die Quelle: die Zelle ändern, das Änderungsereignis zeichnet neu.
-    if (Sheet* s = sheetFor(sheetKey(element.Get())); s && s->workbook && !s->closed) {
-        try {
-            auto sheet = disp::object(disp::object(s->workbook.Get(), L"Worksheets").Get(), L"Item", 1L);
-            auto cell = disp::object(sheet.Get(), L"Range", columnName(static_cast<size_t>(column)) + std::to_wstring(row + 1));
-            disp::put(cell.Get(), L"Value2", change.percent ? change.value / 100.0 : change.value);
-        } catch (const std::exception& e) {
-            if (isBusy(e)) throw Error("Excel ist gerade beschäftigt (Zelle im Bearbeitungsmodus?). Bitte die Zelle verlassen und erneut klicken.");
-            throw;
-        }
+    if (Sheet* s = openExcelSheet(element.Get())) {
+        writeExcelCell(*s, row, column, change.cell);
         s->dirty = true;
         s->dirtyAt = GetTickCount64() - 300;  // sofort übernehmen
         refreshAll(false);
@@ -957,6 +990,136 @@ void adjustSegment(IDispatch* app, int row, int column, int direction, bool larg
     }
     renderElement(slide.Get(), element, change.item, layoutBox(element.Get()));
     if (GridContext* g = gridFor(element.Get())) datasheetSetTable(g->window, change.item.table);  // offenes Datenblatt mitführen
+}
+
+// ---- Ziehen der ▲▼-Griffe ----
+
+namespace {
+
+// Zustand eines laufenden Ziehens. Modell, Optionen und Layout-Rahmen werden zu Beginn eingefroren; jeder Schritt
+// rechnet nur das Layout neu (reines C++, ohne Worker-Thread) und fasst nur Formen an, die sich geändert haben.
+// Der Vergleich mit der letzten Zeichnung ist nur hier zulässig: während des Ziehens hält das Overlay die Maus,
+// niemand sonst kann die Formen verändern.
+struct SegmentDrag {
+    ComPtr<IDispatch> slide, group;
+    DataItem item;
+    ChartOptions options;
+    Box box;
+    int row = 0, column = 0;
+    Drawing last;         // zuletzt gezeichnet
+    bool synced = false;  // Formen entsprechen `last` (erst nach dem ersten Schritt)
+    RoleMap byRole;
+};
+std::optional<SegmentDrag> g_drag;
+
+Drawing layoutForDrag(const SegmentDrag& drag) {
+    try {
+        return layoutChart(drag.item, drag.options, drag.box);
+    } catch (const std::invalid_argument& e) {
+        throw Error(std::format("Diagramm '{}': {}", narrow(drag.item.name), e.what()));
+    }
+}
+
+std::vector<SegmentInfo> segmentsOfDrawing(const Drawing& d) {
+    std::vector<SegmentInfo> result;
+    for (auto& p : d.prims) {
+        SegmentInfo s;
+        if (p.kind != Prim::Kind::Rect || sscanf_s(p.role.c_str(), "segment r%d c%d", &s.row, &s.column) != 2) continue;
+        s.flags = p.flags;
+        s.left = pt(p.x), s.top = pt(p.y), s.width = pt(p.w), s.height = pt(p.h);
+        result.push_back(s);
+    }
+    return result;
+}
+
+bool sameRoles(const Drawing& a, const Drawing& b) {
+    if (a.prims.size() != b.prims.size()) return false;
+    for (size_t i = 0; i < a.prims.size(); ++i)
+        if (a.prims[i].role != b.prims[i].role) return false;
+    return true;
+}
+
+}  // namespace
+
+SegmentDragStart beginSegmentDrag(IDispatch* app, int row, int column) {
+    g_drag.reset();
+    auto element = selectedElement(app);
+    const std::wstring stored = tagValue(element.Get(), kModelTag);
+    const std::wstring separator = localeDecimalSeparator();
+
+    SegmentDrag drag;
+    drag.slide = disp::object(element.Get(), L"Parent");
+    drag.group = element;
+    drag.row = row, drag.column = column;
+    drag.box = layoutBox(element.Get());
+    std::tie(drag.item, drag.options) = onWorker([&] {
+        DataItem item = parseDataItemJson(stored);
+        ChartOptions options = parseChartOptions(item.chartJson);
+        return std::pair{std::move(item), std::move(options)};
+    });
+    drag.options.decimalSeparator = separator;
+    const Cell& cell = valueCell(drag.item, row, column);
+
+    SegmentDragStart start;
+    start.value = cell.number;
+    start.decimals = stepDecimals(cell, drag.options);
+    drag.last = layoutForDrag(drag);
+    start.pointsPerUnit = emuPerUnit(drag.last) / kEmuPerPt;
+
+    auto byRole = shapesByRole(element.Get(), drag.last);
+    if (!byRole) {  // Formen passen nicht mehr zum Modell (z. B. von Hand gelöscht): einmal vollständig neu zeichnen
+        drag.group = renderElement(drag.slide.Get(), element, drag.item, drag.box);
+        byRole = shapesByRole(drag.group.Get(), drag.last);
+        if (!byRole) throw Error("Das Diagramm lässt sich nicht ziehen. Bitte das Datenblatt verwenden.");
+        drag.synced = true;
+    }
+    drag.byRole = std::move(*byRole);
+
+    // Alle Änderungen des Ziehens bilden einen einzigen Rückgängig-Eintrag (ab PowerPoint 2010).
+    try {
+        disp::call(app, L"StartNewUndoEntry");
+    } catch (const std::exception&) {
+    }
+    g_drag = std::move(drag);
+    return start;
+}
+
+bool dragSegmentTo(double value, std::vector<SegmentInfo>& segments) {
+    if (!g_drag) return false;
+    SegmentDrag& drag = *g_drag;
+    Cell& cell = drag.item.table[drag.row][drag.column];
+    if (drag.synced && cell.number == value) return false;
+    cell.number = value;
+
+    Drawing d = layoutForDrag(drag);
+    if (!sameRoles(d, drag.last)) {
+        // Andere Formen (selten, z. B. Beschriftung entfällt): vollständig neu zeichnen und Rollen neu einlesen
+        drag.group = renderElement(drag.slide.Get(), drag.group, drag.item, drag.box);
+        auto byRole = shapesByRole(drag.group.Get(), d);
+        if (!byRole) throw Error("Das Diagramm lässt sich nicht weiter ziehen.");
+        drag.byRole = std::move(*byRole);
+    } else {
+        for (size_t i = 0; i < d.prims.size(); ++i)
+            if (!drag.synced || !samePrim(d.prims[i], drag.last.prims[i])) updateShape(drag.byRole[widen(d.prims[i].role)].Get(), d.prims[i]);
+    }
+    drag.last = std::move(d);
+    drag.synced = true;
+    segments = segmentsOfDrawing(drag.last);
+    return true;
+}
+
+void endSegmentDrag() {
+    if (!g_drag) return;
+    SegmentDrag drag = std::move(*g_drag);
+    g_drag.reset();
+    if (!drag.synced) return;  // Wert nie geändert
+
+    const DataItem& item = drag.item;
+    setTag(drag.group.Get(), kModelTag, onWorker([&] { return serializeDataItem(item); }));
+    storeLayout(drag.group.Get(), drag.box);
+    if (GridContext* g = gridFor(drag.group.Get())) datasheetSetTable(g->window, item.table);
+    // Excel-Datenblatt: Zelle nachführen; das Änderungsereignis zeichnet mit denselben Werten (keine Änderung).
+    if (Sheet* s = openExcelSheet(drag.group.Get())) writeExcelCell(*s, drag.row, drag.column, item.table[drag.row][drag.column]);
 }
 
 std::vector<SegmentInfo> segmentsOf(IDispatch* element) {

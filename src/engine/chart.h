@@ -105,6 +105,10 @@ int stepDecimals(const Cell& cell, const ChartOptions& options);
 // gerundet auf die Schrittweite. Der Maßstab wird zu Beginn eingefroren.
 double dragValue(double startValue, double pixels, double pixelsPerUnit, int decimals);
 
+// Maßstab einer Zeichnung in EMU je Werteinheit, abgelesen am Segment mit dem größten Betrag
+// (0, wenn alle Segmente 0 sind). Grundlage des eingefrorenen Maßstabs beim Ziehen.
+double emuPerUnit(const Drawing& drawing);
+
 // Zahl mit festen Nachkommastellen und gewähltem Dezimaltrennzeichen.
 std::wstring formatValue(double value, int decimals, const std::wstring& decimalSeparator, bool percent);
 

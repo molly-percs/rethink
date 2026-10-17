@@ -4,10 +4,12 @@
 
 #include "dispatch.h"
 #include "elements.h"
+#include "engine/chart.h"
 #include "overlay.h"
 
 #include <ocidl.h>
 
+#include <cmath>
 #include <format>
 #include <string>
 #include <vector>
@@ -33,7 +35,25 @@ OverlayContent g_shown;
 UINT_PTR g_trackTimer = 0;
 bool g_acting = false;
 
+// Ziehen eines ▲▼-Griffs (Maßstab und Schrittweite zu Beginn eingefroren)
+struct Drag {
+    bool active = false;  // beginSegmentDrag war erfolgreich
+    double start = 0, pixelsPerUnit = 0;
+    int decimals = 0;
+    std::wstring error;  // erst nach dem Loslassen melden: während des Ziehens hält das Overlay die Maus
+};
+bool g_dragging = false;
+Drag g_drag;
+double g_lastPixelsPerUnit = 0;  // für Tests
+
+// Leuchtrahmen folgt dem Verschieben des Elements in PowerPoint (Maus-Hook, nur dieser Thread)
+enum class Follow { None, Armed, Moving, Resizing };
+HHOOK g_mouseHook = nullptr;
+Follow g_follow = Follow::None;
+POINT g_followFrom{};
+
 void stopTracking() {
+    g_follow = Follow::None;
     g_element.Reset();
     g_segments.clear();
     g_cachedWidth = -1;
@@ -129,7 +149,7 @@ bool sameContent(const OverlayContent& a, const OverlayContent& b) {
     return true;
 }
 
-void onOverlayAction(const OverlayHandle& handle, bool shift);
+void onOverlayAction(const OverlayHandle& handle, OverlayGesture gesture, int pixels, bool shift);
 
 // Overlay an das Element anpassen (Zoom, Bildlauf, Verschieben, Größe). force = Segmente neu einlesen.
 void placeOverlay(bool force) {
@@ -140,9 +160,19 @@ void placeOverlay(bool force) {
         g_cachedLeft = left, g_cachedTop = top, g_cachedWidth = width, g_cachedHeight = height;
     }
     const OverlayContent content = buildContent(left, top, width, height);
-    if (!force && overlayVisible() && sameContent(content, g_shown)) return;
+    if (!force && overlayVisible() && !overlayDisplaced() && sameContent(content, g_shown)) return;
     g_shown = content;
     showOverlay(powerPointWindow(), content, onOverlayAction);
+}
+
+// Overlay während des Ziehens: Segmente kommen aus der Zeichnung, nicht aus erneuten Abfragen der Formen.
+void placeOverlayFor(const std::vector<SegmentInfo>& segments) {
+    if (!g_element) return;
+    g_segments = segments;
+    g_cachedLeft = disp::call(g_element.Get(), L"Left").toDouble(), g_cachedTop = disp::call(g_element.Get(), L"Top").toDouble();
+    g_cachedWidth = disp::call(g_element.Get(), L"Width").toDouble(), g_cachedHeight = disp::call(g_element.Get(), L"Height").toDouble();
+    g_shown = buildContent(g_cachedLeft, g_cachedTop, g_cachedWidth, g_cachedHeight);
+    showOverlay(powerPointWindow(), g_shown, onOverlayAction);
 }
 
 void track() {
@@ -158,7 +188,11 @@ void track() {
 }
 
 void CALLBACK onTrack(HWND, UINT, UINT_PTR, DWORD) {
-    if (!g_element || g_acting) return;
+    if (!g_element || g_acting || g_dragging) return;
+    if (g_follow != Follow::None) {
+        if (GetAsyncKeyState(VK_LBUTTON) & 0x8000) return;  // PowerPoint verschiebt noch oder ändert die Größe
+        g_follow = Follow::None;                             // Loslassen verpasst: ab jetzt wieder normal nachführen
+    }
     try {
         track();
     } catch (const std::exception& e) {
@@ -169,8 +203,73 @@ void CALLBACK onTrack(HWND, UINT, UINT_PTR, DWORD) {
     }
 }
 
-void onOverlayAction(const OverlayHandle& handle, bool shift) {
-    if (!g_app || g_acting) return;
+// Eine Geste des Ziehens verarbeiten. Liefert bei DragEnd/DragCancel einen aufgelaufenen Fehler (sonst leer).
+std::wstring dragGesture(const OverlayHandle& handle, OverlayGesture gesture, int pixels) {
+    const bool finish = gesture == OverlayGesture::DragEnd || gesture == OverlayGesture::DragCancel;
+    try {
+        if (!g_dragging) {
+            if (gesture == OverlayGesture::DragCancel) return {};  // abgebrochen, bevor etwas geändert wurde
+            g_dragging = true;
+            g_drag = {};
+            const SegmentDragStart start = beginSegmentDrag(g_app.Get(), handle.row, handle.column);
+            g_drag.start = start.value;
+            g_drag.decimals = start.decimals;
+            g_drag.pixelsPerUnit = start.pointsPerUnit * std::fabs(currentMapping().ay);
+            // Alle Segmente 0: kein Maßstab ablesbar – dann 4 Pixel je Schritt
+            if (g_drag.pixelsPerUnit <= 0) g_drag.pixelsPerUnit = scaled(4) * std::pow(10.0, start.decimals);
+            g_lastPixelsPerUnit = g_drag.pixelsPerUnit;
+            g_drag.active = true;
+        }
+        if (g_drag.active) {
+            const double value = gesture == OverlayGesture::DragCancel
+                                     ? g_drag.start
+                                     : engine::dragValue(g_drag.start, pixels, g_drag.pixelsPerUnit, g_drag.decimals);
+            std::vector<SegmentInfo> segments;
+            if (dragSegmentTo(value, segments)) {
+                try {
+                    placeOverlayFor(segments);
+                } catch (...) {
+                    // Griffe bleiben stehen; nach dem Loslassen setzt track() das Overlay neu
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        if (g_drag.error.empty()) g_drag.error = widen(e.what());
+        g_drag.active = false;
+    } catch (const winrt::hresult_error& e) {
+        if (g_drag.error.empty()) g_drag.error = e.message().c_str();
+        g_drag.active = false;
+    } catch (...) {
+        if (g_drag.error.empty()) g_drag.error = L"Unerwarteter Fehler beim Ziehen";
+        g_drag.active = false;
+    }
+    if (!finish) return {};
+
+    std::wstring error = std::move(g_drag.error);
+    try {
+        endSegmentDrag();
+    } catch (const std::exception& e) {
+        if (error.empty()) error = widen(e.what());
+    } catch (...) {
+    }
+    g_dragging = false;
+    g_drag = {};
+    try {
+        if (g_element) track();  // Element kann bei einem vollständigen Neuzeichnen ersetzt worden sein
+    } catch (...) {
+        stopTracking();
+    }
+    return error;
+}
+
+void onOverlayAction(const OverlayHandle& handle, OverlayGesture gesture, int pixels, bool shift) {
+    if (!g_app) return;
+    if (gesture != OverlayGesture::Click) {
+        const std::wstring error = dragGesture(handle, gesture, pixels);
+        if (!error.empty()) MessageBoxW(powerPointWindow(), error.c_str(), L"rethink", MB_ICONINFORMATION);
+        return;
+    }
+    if (g_acting || g_dragging) return;
     g_acting = true;
     try {
         if (handle.action == OverlayAction::Datasheet) {
@@ -188,6 +287,42 @@ void onOverlayAction(const OverlayHandle& handle, bool shift) {
     g_acting = false;
 }
 
+// Maus-Hook: PowerPoint meldet Left/Top erst beim Loslassen. Bis dahin wird das Overlay um den Mausweg versetzt;
+// beim Ändern der Größe (Drücken auf einen Anfasser) verschwindet es und kommt nach dem Neu-Layout wieder.
+LRESULT CALLBACK onMouse(int code, WPARAM message, LPARAM lParam) {
+    if (code >= 0 && g_element && !g_dragging && !g_acting) {
+        const auto* info = reinterpret_cast<const MOUSEHOOKSTRUCT*>(lParam);
+        if (info->hwnd != overlayWindow()) {
+            const POINT p = info->pt;
+            switch (message) {
+                case WM_LBUTTONDOWN: {
+                    g_follow = Follow::None;
+                    if (!overlayVisible()) break;
+                    const RECT probe{p.x, p.y, p.x + 1, p.y + 1};
+                    if (hitsGrip(probe, g_shown.element)) g_follow = Follow::Resizing;
+                    else if (PtInRect(&g_shown.element, p)) g_follow = Follow::Armed;
+                    g_followFrom = p;
+                    break;
+                }
+                case WM_MOUSEMOVE: {
+                    if (g_follow == Follow::None || (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) break;
+                    const int dx = p.x - g_followFrom.x, dy = p.y - g_followFrom.y;
+                    if (g_follow == Follow::Armed && std::abs(dx) < GetSystemMetrics(SM_CXDRAG) && std::abs(dy) < GetSystemMetrics(SM_CYDRAG))
+                        break;
+                    if (g_follow == Follow::Resizing) {
+                        if (overlayVisible()) hideOverlay();
+                    } else {
+                        g_follow = Follow::Moving;
+                        offsetOverlay(dx, dy);
+                    }
+                    break;
+                }
+                case WM_LBUTTONUP: g_follow = Follow::None; break;  // der nächste Takt setzt das Overlay an die neue Lage
+            }
+        }
+    }
+    return CallNextHookEx(g_mouseHook, code, message, lParam);
+}
 void onSelectionChange(IDispatch* selection) {
     try {
         auto element = rethinkElementOf(selection);
@@ -245,7 +380,7 @@ public:
     STDMETHODIMP Invoke(DISPID id, REFIID, LCID, WORD, DISPPARAMS* params, VARIANT*, EXCEPINFO*, UINT*) override {
         ++g_eventCount;
         try {
-            if (g_acting) return S_OK;  // eigene Änderungen lösen keine Neuberechnung des Overlays aus
+            if (g_acting || g_dragging) return S_OK;  // eigene Änderungen lösen keine Neuberechnung des Overlays aus
             if (id == g_selectionChange && params && params->cArgs >= 1) {
                 onSelectionChange(dispatchArg(params->rgvarg[params->cArgs - 1]));
             } else if (id == g_beforeDoubleClick && params && params->cArgs >= 2) {
@@ -314,9 +449,19 @@ void startEvents(IDispatch* app) {
         g_cookie = 0;
     }
     sink->Release();
+    g_mouseHook = SetWindowsHookExW(WH_MOUSE, onMouse, nullptr, GetCurrentThreadId());
 }
 
 void stopEvents() {
+    if (g_mouseHook) UnhookWindowsHookEx(g_mouseHook);
+    g_mouseHook = nullptr;
+    if (g_dragging) {
+        try {
+            endSegmentDrag();
+        } catch (...) {
+        }
+        g_dragging = false;
+    }
     stopTracking();
     if (g_point && g_cookie) g_point->Unadvise(g_cookie);
     g_point.Reset();
@@ -342,6 +487,16 @@ std::wstring overlayInfo() {
                             h.action == OverlayAction::Up ? L"auf" : h.action == OverlayAction::Down ? L"ab" : L"datenblatt", h.row, h.column,
                             h.rect.left, h.rect.top, h.rect.right, h.rect.bottom);
     return text;
+}
+
+std::wstring simulateSegmentDrag(int row, int column, const std::vector<int>& pixels) {
+    if (!g_app) throw Error("Das Add-in ist nicht mit PowerPoint verbunden");
+    if (g_dragging) throw Error("Es wird bereits gezogen");
+    const OverlayHandle handle{{}, OverlayAction::Up, row, column};
+    for (int p : pixels) dragGesture(handle, OverlayGesture::Drag, p);
+    const std::wstring error = dragGesture(handle, OverlayGesture::DragEnd, pixels.empty() ? 0 : pixels.back());
+    if (!error.empty()) throw Error(narrow(error));
+    return std::format(L"pixelProEinheit={:.4f}", g_lastPixelsPerUnit);
 }
 
 }  // namespace rethink::addin

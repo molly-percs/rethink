@@ -189,6 +189,15 @@ void testStepAndDrag() {
     check(approx(dragValue(12.5, -7, 10, 1), 11.8), "Ziehen: Nachkommastelle bleibt (12,5 → 11,8)");
     check(approx(dragValue(-3, 50, 10, 0), 2), "Ziehen: über die Null (−3 → 2)");
     check(dragValue(0.2, -2, 10, 0) == 0.0 && !std::signbit(dragValue(0.2, -2, 10, 0)), "Ziehen: kein −0");
+
+    // Maßstab: alle Segmente teilen ihn; abgelesen am größten Betrag (die Endsumme 12)
+    const Drawing d = layoutChart(single({num(10), num(5), num(-3), e()}), o, Box{0, 0, 6000000, 4000000});
+    const double scale = emuPerUnit(d);
+    bool consistent = scale > 0;
+    for (auto& p : d.prims)
+        if (p.kind == Prim::Kind::Rect && !p.flags.empty()) consistent = consistent && std::fabs(p.h - std::fabs(p.value) * scale) <= 1.0;
+    check(consistent, "Maßstab: Segmenthöhe = |Wert| × EMU je Einheit");
+    check(emuPerUnit(layoutChart(single({num(0), num(0)}), o, Box{0, 0, 6000000, 4000000})) == 0, "Maßstab: nur Nullen → 0");
 }
 
 }  // namespace

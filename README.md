@@ -47,7 +47,7 @@ Start PowerPoint → tab **rethink** appears. Remove it again with `.\scripts\un
 ### 4. Try it
 1. **rethink › Diagramme › Wasserfall einfügen** inserts a waterfall chart with sample data and a data table.
 2. Click the chart: a thin **blue glow** with a tiny “rethink chart” label appears, plus **▲▼ handles** on every bar and a **table icon** at the bottom right.
-3. Click ▲ / ▼ on a bar (Shift = 10× step): the value changes, connectors and totals (`e`) recalculate instantly.
+3. Click ▲ / ▼ on a bar (Shift = 10× step) or **drag** a handle up/down (Esc cancels; one undo step per drag): the value changes in steps matching the precision you entered (12 → 1, 12,5 → 0,1), connectors and totals (`e`) recalculate live.
 4. Click the **table icon** (or double-click the chart): the built-in **datasheet** opens. Type values (`12,5`, `48%`, `e`, dates), paste from Excel with Ctrl+V, right-click for rows/columns, percent and cell colour. Every entry updates the chart immediately; just close the window when done.
 
 ### 5. Try the command line tool

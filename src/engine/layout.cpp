@@ -213,6 +213,16 @@ double dragValue(double startValue, double pixels, double pixelsPerUnit, int dec
     return rounded == 0.0 ? 0.0 : rounded;  // kein -0
 }
 
+double emuPerUnit(const Drawing& drawing) {
+    double best = 0, scale = 0;
+    for (auto& p : drawing.prims) {
+        if (p.kind != Prim::Kind::Rect || p.flags.empty() || std::fabs(p.value) <= best) continue;
+        best = std::fabs(p.value);
+        scale = static_cast<double>(p.h) / best;
+    }
+    return scale;
+}
+
 int chartDecimals(const DataItem& item, const ChartOptions& options) {
     if (options.decimals) return *options.decimals;
     std::vector<double> values;

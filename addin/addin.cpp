@@ -17,6 +17,7 @@
 // WRL (module.h, StaticStorage) löst bei der Instanziierung C4324 aus: Auffüllung wegen alignas – unkritisch.
 #pragma warning(disable : 4324)
 
+#include <algorithm>
 #include <format>
 #include <string>
 #include <vector>
@@ -58,6 +59,7 @@ enum : DISPID {
     kDatasheetCell,
     kCloseDatasheet,
     kDatasheetCount,
+    kDragSegment,
 };
 
 struct Member {
@@ -74,7 +76,7 @@ constexpr Member kMembers[] = {
     {L"EventStatus", kEventStatus},  {L"AdjustSegment", kAdjustSegment}, {L"OverlayInfo", kOverlayInfo},
     {L"DatasheetWorkbook", kDatasheetWorkbook}, {L"OpenExcelDatasheet", kOpenExcelDatasheet}, {L"DatasheetEnter", kDatasheetEnter},
     {L"DatasheetPaste", kDatasheetPaste}, {L"DatasheetCell", kDatasheetCell}, {L"CloseDatasheet", kCloseDatasheet},
-    {L"DatasheetCount", kDatasheetCount},
+    {L"DatasheetCount", kDatasheetCount}, {L"DragSegment", kDragSegment},
 };
 
 long longArg(const DISPPARAMS* params, UINT index) {
@@ -141,6 +143,25 @@ std::wstring stringArg(const DISPPARAMS* params, UINT index, bool optional) {
     std::wstring s(text.bstrVal, SysStringLen(text.bstrVal));
     VariantClear(&text);
     return s;
+}
+
+// Mausweg-Liste "10;25;-5" (Pixel, positiv = nach oben) für DragSegment.
+std::vector<int> pixelListArg(const DISPPARAMS* params, UINT index) {
+    std::vector<int> pixels;
+    const std::wstring text = stringArg(params, index, false);
+    for (size_t pos = 0; pos <= text.size();) {
+        const size_t end = std::min(text.find(L';', pos), text.size());
+        const std::wstring part = text.substr(pos, end - pos);
+        if (!part.empty()) {
+            try {
+                pixels.push_back(std::stoi(part));
+            } catch (const std::exception&) {
+                throw Error("Mausweg als Zahlen mit ; getrennt angeben, z. B. \"10;25;-5\"");
+            }
+        }
+        pos = end + 1;
+    }
+    return pixels;
 }
 
 void setString(VARIANT* result, std::wstring_view s) {
@@ -246,6 +267,7 @@ public:
                 adjustSegment(app_.Get(), longArg(params, 0), longArg(params, 1), longArg(params, 2) >= 0 ? 1 : -1, boolArg(params, 3, false));
                 return S_OK;
             case kOverlayInfo: setString(result, overlayInfo()); return S_OK;
+            case kDragSegment: setString(result, simulateSegmentDrag(longArg(params, 0), longArg(params, 1), pixelListArg(params, 2))); return S_OK;
             case kDatasheetWorkbook: {
                 auto workbook = datasheetWorkbook(app_.Get());
                 if (result) {

@@ -36,8 +36,9 @@ ComPtr<IDispatch> datasheetWorkbook(IDispatch* app);
 // Übernimmt geänderte Datenblätter sofort (sonst alle 300 ms). Liefert die Zahl neu gezeichneter Elemente.
 int applyDatasheets(IDispatch* app);
 
-// Ändert den Wert eines Segments des ausgewählten Elements um einen Schritt (▲ = +1, ▼ = -1);
-// large = zehnfacher Schritt. Ist das Datenblatt offen, wird die Excel-Zelle geändert.
+// Ändert den Wert eines Segments des ausgewählten Elements um einen Schritt (▲ = +1, ▼ = -1); die Schrittweite
+// folgt der Genauigkeit des eingegebenen Werts (stepDecimals), large = zehnfacher Schritt.
+// Ist das Datenblatt offen, wird die Excel-Zelle geändert.
 void adjustSegment(IDispatch* app, int row, int column, int direction, bool large);
 
 // Segmente eines Elements für die ▲▼-Griffe (Folienkoordinaten in Punkt).
@@ -47,6 +48,20 @@ struct SegmentInfo {
     double left = 0, top = 0, width = 0, height = 0;
 };
 std::vector<SegmentInfo> segmentsOf(IDispatch* element);
+
+// Ziehen eines ▲▼-Griffs am ausgewählten Element. Beginn friert Modell, Layout-Rahmen und Maßstab ein und
+// öffnet einen Rückgängig-Eintrag für das ganze Ziehen; wirft bei "e" und Nicht-Zahlen.
+struct SegmentDragStart {
+    double value = 0;          // Wert zu Beginn
+    int decimals = 0;          // Schrittweite 10^-decimals (stepDecimals)
+    double pointsPerUnit = 0;  // eingefrorener Maßstab; 0, wenn alle Segmente 0 sind
+};
+SegmentDragStart beginSegmentDrag(IDispatch* app, int row, int column);
+// Setzt den (bereits gerundeten) Wert und passt nur geänderte Formen an. Liefert false, wenn sich nichts
+// geändert hat; sonst die neue Lage der Segmente (ohne die Formen erneut abzufragen).
+bool dragSegmentTo(double value, std::vector<SegmentInfo>& segments);
+// Schreibt Modell und Layout an das Element und führt offene Datenblätter (eingebaut, Excel) nach.
+void endSegmentDrag();
 
 // Zeichnet das Element neu, wenn seine Größe seit dem letzten Zeichnen geändert wurde. Liefert true bei Neuzeichnen.
 bool relayoutIfResized(IDispatch* element);

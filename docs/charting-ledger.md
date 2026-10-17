@@ -76,9 +76,9 @@ Slide library and templates are intentionally **out of scope**.
 | Built-in datasheet (spreadsheet look; table icon bottom right; double-click) with live update | ✅ typing, paste, undo, rows/columns, %, cell colour (automation-tested; manual mouse/keyboard check pending) |
 | Datasheet in Excel (optional): live, closing never prompts | ✅ |
 | Selection glow + tiny "rethink chart" label, document untouched | ✅ |
-| ▲▼ handles per segment: click = one step | ✅ |
-| Drag handles to change values quickly (live, frozen scale, step by entered precision, `e` locked) | 🟡 in progress (engine part done and tested) |
-| Glow follows the chart **while** it is being moved | ⬜ in progress |
+| ▲▼ handles per segment: click = one step (step follows the precision of the entered value) | ✅ |
+| Drag handles to change values quickly (live, frozen scale, step by entered precision, `e` locked, Esc cancels, one undo entry) | 🟡 implemented; engine unit-tested, add-in not yet built/run on Windows |
+| Glow follows the chart **while** it is being moved (hidden while resizing) | 🟡 implemented (mouse hook); manual check on Windows pending |
 | In-place updates keep user formatting | ✅ |
 | Resize with the mouse re-lays out the chart | ✅ |
 | `.ppttc` fills rethink elements (`RETHINK_MODEL`) and placeholders | ✅ CLI |

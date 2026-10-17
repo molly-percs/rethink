@@ -65,6 +65,39 @@ try {
     $api.AdjustSegment(1, 1, 1, $false)
     Expect ($slide.Shapes.Item($name).GroupItems.Item('segment r1 c1').Fill.ForeColor.RGB -eq 0x00B050) 'eigene Segmentfarbe bleibt bei Wertänderung'
 
+    # 3b. ▲▼ ziehen: dieselben Schritte wie mit der Maus (Maßstab eingefroren, Schritt nach Genauigkeit des Werts)
+    $slide.Shapes.Item($name).Select(); Start-Sleep -Milliseconds 400
+    $api.OpenDatasheet($false)
+    $idsBefore = Ids $slide.Shapes.Item($name)
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $r = $api.DragSegment(1, 2, '6;15;30')   # Umsatz 41, 30 px nach oben
+    $sw.Stop()
+    $ppu = [double]([regex]::Match($r, 'pixelProEinheit=([\d.]+)').Groups[1].Value)
+    $expected = 41 + [math]::Round(30 / $ppu, [MidpointRounding]::AwayFromZero)
+    $cell = $api.DatasheetCell(1, 2)
+    Expect ($ppu -gt 0 -and $expected -gt 41 -and $cell -eq [string]$expected) "Ziehen um 30 px: 41 → $expected (Datenblatt: $cell, $r, $($sw.ElapsedMilliseconds) ms)"
+    Expect ($slide.Shapes.Item($name).Tags.Item('RETHINK_MODEL') -match ('"number":' + $expected + '[,}]')) '… Modell am Element gespeichert'
+    Expect ((Ids $slide.Shapes.Item($name)) -eq $idsBefore) '… an Ort und Stelle'
+    [void]$api.DragSegment(1, 2, '30;0')
+    Expect ($api.DatasheetCell(1, 2) -eq [string]$expected) 'hin und zurück ziehen: Wert unverändert'
+    $r = $api.DragSegment(1, 3, '-20')         # Kosten -35, 20 px nach unten: Balken wächst nach unten
+    $ppu = [double]([regex]::Match($r, 'pixelProEinheit=([\d.]+)').Groups[1].Value)
+    $down = -35 - [math]::Round(20 / $ppu, [MidpointRounding]::AwayFromZero)
+    Expect ($down -lt -35 -and $api.DatasheetCell(1, 3) -eq [string]$down) "negatives Segment nach unten: -35 → $down"
+    $eBlocked = $false
+    try { [void]$api.DragSegment(1, 4, '20') } catch { $eBlocked = $_.Exception.Message -match 'berechnet' }
+    Expect $eBlocked 'e-Segment lässt sich nicht ziehen'
+    $api.CloseDatasheet()
+    # ein Rückgängig nimmt das ganze Ziehen zurück (StartNewUndoEntry zu Beginn)
+    $slide.Shapes.Item($name).Select()
+    [void]$api.DragSegment(1, 2, '10;20;40')
+    $pp.CommandBars.ExecuteMso('Undo'); Start-Sleep -Milliseconds 300
+    Expect ($slide.Shapes.Item($name).Tags.Item('RETHINK_MODEL') -match ('"number":' + $expected + '[,}]')) 'ein Rückgängig nimmt das ganze Ziehen zurück'
+    # Werte für die folgenden Teile zurücksetzen (Umsatz 41, Kosten -35)
+    $slide.Shapes.Item($name).Select(); $api.OpenDatasheet($false)
+    $api.DatasheetEnter(1, 2, '41'); $api.DatasheetEnter(1, 3, '-35')
+    $api.CloseDatasheet()
+
     # 4a. Eingebautes Datenblatt (Symbol unten rechts / Doppelklick)
     $slide.Shapes.Item($name).Select()
     $api.OpenDatasheet($false)
@@ -81,8 +114,8 @@ try {
     $slide.Shapes.Item($name).Select()
     $api.AdjustSegment(1, 2, 1, $false)
     $cell = $api.DatasheetCell(1, 2)
-    # seit -12,5 im Datenblatt steht, zeigt das Diagramm eine Nachkommastelle → Schritt 0,1
-    Expect ($cell -eq '45,1') "▲ (Schritt 0,1) aktualisiert das offene Datenblatt (Zelle: $cell)"
+    # Schritt nach der Genauigkeit des Werts selbst: 45 → 46, obwohl das Diagramm wegen -12,5 eine Nachkommastelle zeigt
+    Expect ($cell -eq '46') "▲ (Schritt 1) aktualisiert das offene Datenblatt (Zelle: $cell)"
     $api.CloseDatasheet()
     Expect ($api.DatasheetCount() -eq 0) 'Datenblatt geschlossen (nichts zu speichern)'
     # Werte für den Excel-Teil zurücksetzen (Umsatz 41)

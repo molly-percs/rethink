@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <vector>
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
@@ -11,14 +12,26 @@ namespace rethink::addin {
 namespace {
 
 constexpr wchar_t kClass[] = L"rethinkSelectionOverlay";
-constexpr UINT kMsgAction = WM_APP + 41;
+constexpr UINT kMsgAction = WM_APP + 41;  // wParam = Geste, lParam = Mausweg
 constexpr COLORREF kBlue = RGB(37, 120, 235);  // rethink-Blau
 
 HWND g_window = nullptr;
 OverlayContent g_content;
 POINT g_origin{};  // Bildschirmposition der linken oberen Fensterecke
+bool g_displaced = false;
 OverlayCallback g_callback = nullptr;
-int g_pressed = -1;
+
+// Gedrückter Griff. Kopie statt Index: während des Ziehens baut der Rückruf das Overlay laufend neu auf.
+struct Press {
+    bool active = false;
+    OverlayHandle handle;
+    POINT start{};
+    bool shift = false;
+    bool dragging = false;
+    bool posted = false;  // eine Drag-Nachricht steht noch aus: nur den neuesten Mausweg merken
+    int pixels = 0;
+};
+Press g_press;
 
 int scaled(HWND hwnd, int px) {
     const UINT dpi = hwnd ? GetDpiForWindow(hwnd) : 96;
@@ -34,6 +47,25 @@ int hitHandle(POINT screen) {
     return -1;
 }
 
+POINT messagePos() {
+    const DWORD pos = GetMessagePos();  // Bildschirmkoordinaten zum Zeitpunkt der Nachricht
+    return {static_cast<short>(LOWORD(pos)), static_cast<short>(HIWORD(pos))};
+}
+
+void post(HWND hwnd, OverlayGesture gesture, int pixels) {
+    PostMessageW(hwnd, kMsgAction, static_cast<WPARAM>(gesture), static_cast<LPARAM>(pixels));
+}
+
+// Drücken beenden; ein laufendes Ziehen endet mit `gesture` (DragEnd oder DragCancel).
+void release(HWND hwnd, OverlayGesture gesture) {
+    if (!g_press.active) return;
+    const bool dragging = g_press.dragging;
+    g_press.active = false;  // vor ReleaseCapture: WM_CAPTURECHANGED soll nichts mehr auslösen
+    if (GetCapture() == hwnd) ReleaseCapture();
+    if (dragging) post(hwnd, gesture, g_press.pixels);
+    else if (gesture == OverlayGesture::DragEnd) post(hwnd, OverlayGesture::Click, 0);
+}
+
 LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_NCHITTEST: {
@@ -42,19 +74,62 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return hitHandle(p) >= 0 ? HTCLIENT : HTTRANSPARENT;
         }
         case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
-        case WM_SETCURSOR: SetCursor(LoadCursorW(nullptr, IDC_HAND)); return TRUE;
+        case WM_SETCURSOR: {
+            const int index = hitHandle(messagePos());
+            const bool valueHandle = index >= 0 && g_content.handles[index].action != OverlayAction::Datasheet;
+            SetCursor(LoadCursorW(nullptr, valueHandle ? IDC_SIZENS : IDC_HAND));
+            return TRUE;
+        }
         case WM_LBUTTONDOWN: {
-            POINT p{static_cast<short>(LOWORD(lParam)), static_cast<short>(HIWORD(lParam))};
-            ClientToScreen(hwnd, &p);
-            g_pressed = hitHandle(p);
-            if (g_pressed >= 0) PostMessageW(hwnd, kMsgAction, static_cast<WPARAM>(g_pressed), (wParam & MK_SHIFT) ? 1 : 0);
+            const POINT p = messagePos();
+            const int index = hitHandle(p);
+            if (index < 0) return 0;
+            g_press = {};
+            g_press.handle = g_content.handles[index];
+            g_press.shift = (wParam & MK_SHIFT) != 0;
+            if (g_press.handle.action == OverlayAction::Datasheet) {
+                post(hwnd, OverlayGesture::Click, 0);
+                return 0;
+            }
+            // ▲▼: Klick oder Ziehen entscheidet sich erst an Bewegung bzw. Loslassen
+            g_press.active = true;
+            g_press.start = p;
+            SetCapture(hwnd);
             return 0;
         }
+        case WM_MOUSEMOVE: {
+            if (!g_press.active) return 0;
+            if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
+                release(hwnd, OverlayGesture::DragCancel);
+                return 0;
+            }
+            const POINT p = messagePos();
+            const int pixels = g_press.start.y - p.y;
+            if (!g_press.dragging && std::abs(pixels) < GetSystemMetrics(SM_CYDRAG)) return 0;
+            g_press.dragging = true;
+            g_press.pixels = pixels;
+            SetCursor(LoadCursorW(nullptr, IDC_SIZENS));
+            if (!g_press.posted) {
+                g_press.posted = true;
+                post(hwnd, OverlayGesture::Drag, pixels);
+            }
+            return 0;
+        }
+        case WM_LBUTTONUP: release(hwnd, OverlayGesture::DragEnd); return 0;
+        case WM_CAPTURECHANGED: release(hwnd, OverlayGesture::DragCancel); return 0;
         case kMsgAction: {
-            const int index = static_cast<int>(wParam);
-            if (g_callback && index >= 0 && index < static_cast<int>(g_content.handles.size())) {
-                const OverlayHandle handle = g_content.handles[index];  // Kopie: der Rückruf baut das Overlay neu auf
-                g_callback(handle, lParam != 0);
+            const auto gesture = static_cast<OverlayGesture>(wParam);
+            int pixels = static_cast<int>(lParam);
+            if (gesture == OverlayGesture::Drag) {
+                if (!g_press.posted) return 0;  // schon durch DragEnd/DragCancel überholt
+                g_press.posted = false;
+                pixels = g_press.pixels;  // neuester Stand, nicht der beim Absenden
+            }
+            if (g_callback) {
+                const OverlayHandle handle = g_press.handle;  // Kopie: der Rückruf baut das Overlay neu auf
+                const bool shift = g_press.shift;
+                if (gesture == OverlayGesture::DragEnd || gesture == OverlayGesture::DragCancel) g_press.posted = false;
+                g_callback(handle, gesture, gesture == OverlayGesture::Click ? 0 : pixels, shift);
             }
             return 0;
         }
@@ -132,6 +207,7 @@ void showOverlay(HWND owner, const OverlayContent& content, OverlayCallback call
     if (!hwnd) return;
     g_content = content;
     g_callback = callback;
+    g_displaced = false;
 
     const int m = margin(owner), glow = scaled(owner, 9);
     const RECT& e = content.element;
@@ -239,11 +315,24 @@ void showOverlay(HWND owner, const OverlayContent& content, OverlayCallback call
 }
 
 void hideOverlay() {
-    if (g_window) ShowWindow(g_window, SW_HIDE);
+    if (g_window) {
+        if (g_press.active) release(g_window, OverlayGesture::DragCancel);
+        ShowWindow(g_window, SW_HIDE);
+    }
     g_content = {};
 }
 
 bool overlayVisible() { return g_window && IsWindowVisible(g_window); }
+
+HWND overlayWindow() { return g_window; }
+
+void offsetOverlay(int dx, int dy) {
+    if (!overlayVisible()) return;
+    SetWindowPos(g_window, nullptr, g_origin.x + dx, g_origin.y + dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    g_displaced = dx != 0 || dy != 0;
+}
+
+bool overlayDisplaced() { return g_displaced; }
 
 RECT overlayRect() {
     RECT r{};

@@ -24,13 +24,25 @@ struct OverlayContent {
     std::vector<OverlayHandle> handles;
 };
 
-// Wird nach einem Klick auf einen Griff aufgerufen (nicht innerhalb der Mausbehandlung, sondern nachgereicht).
-using OverlayCallback = void (*)(const OverlayHandle& handle, bool shift);
+// Geste an einem Griff. Ein ▲▼-Griff wird geklickt (Loslassen ohne Bewegung) oder gezogen: Drag kommt bei jeder
+// Bewegung (zusammengefasst, nur der neueste Stand), danach genau einmal DragEnd oder DragCancel (Esc, Fokusverlust).
+enum class OverlayGesture { Click, Drag, DragEnd, DragCancel };
+
+// Wird nach einer Geste aufgerufen (nicht innerhalb der Mausbehandlung, sondern nachgereicht). pixels: senkrechter
+// Mausweg seit dem Drücken in Bildschirmpixeln, positiv = nach oben. Bei DragEnd/DragCancel ist die Maus frei.
+using OverlayCallback = void (*)(const OverlayHandle& handle, OverlayGesture gesture, int pixels, bool shift);
 
 void showOverlay(HWND owner, const OverlayContent& content, OverlayCallback callback);
 void hideOverlay();
 bool overlayVisible();
 // Fensterrechteck des Overlays (für Tests).
 RECT overlayRect();
+HWND overlayWindow();
+
+// Verschiebt das sichtbare Overlay, ohne es neu zu zeichnen (Leuchtrahmen folgt dem Verschieben in PowerPoint,
+// das Left/Top erst beim Loslassen meldet). dx/dy relativ zur zuletzt gezeigten Lage.
+void offsetOverlay(int dx, int dy);
+// Steht das Overlay nicht mehr dort, wo showOverlay es hingesetzt hat?
+bool overlayDisplaced();
 
 }  // namespace rethink::addin
