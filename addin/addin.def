@@ -1,0 +1,4 @@
+LIBRARY rethink-addin
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE

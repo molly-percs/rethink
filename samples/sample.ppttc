@@ -1,0 +1,53 @@
+[
+	{
+		"template": "template.pptx",
+		"data": [
+			{ "name": "SlideTitle", "table": [[{ "string": "Marktanteile Region Nord" }]] },
+			{ "name": "LeftChartTitle", "table": [[{ "string": "Marktanteil" }]] },
+			{ "name": "RightChartTitle", "table": [[{ "string": "Aufträge (Tsd.)" }]] },
+			{
+				"name": "LeftChart",
+				"table": [
+					[null, { "string": "2023" }, { "string": "2024" }, { "string": "2025" }],
+					[{ "string": "Freier Markt" }, { "percentage": 40 }, { "percentage": 35 }, { "percentage": 30 }],
+					[],
+					[{ "string": "Wettbewerber" }, { "percentage": 25 }, { "percentage": 22 }, { "percentage": 20 }],
+					[{ "string": "Eigene Marke" }, { "percentage": 35 }, { "percentage": 43 }, { "percentage": 50 }]
+				]
+			},
+			{
+				"name": "RightChart",
+				"table": [
+					[null, { "date": "2023-01-01" }, { "date": "2024-01-01" }, { "date": "2025-01-01" }],
+					[{ "string": "Aufträge" }, { "number": 120 }, { "number": 135 }, { "number": 158, "fill": "#C00000" }]
+				]
+			}
+		]
+	},
+	{
+		"template": "template.pptx",
+		"data": [
+			{ "name": "SlideTitle", "table": [[{ "string": "Marktanteile Region Süd" }]] },
+			{ "name": "LeftChartTitle", "table": [[{ "string": "Marktanteil" }]] },
+			{ "name": "RightChartTitle", "table": [[{ "string": "Aufträge (Tsd.)" }]] },
+			{
+				"name": "LeftChart",
+				"table": [
+					[null, { "string": "2023" }, { "string": "2024" }, { "string": "2025" }],
+					[{ "string": "Freier Markt" }, { "percentage": 55 }, { "percentage": 50 }, { "percentage": 48 }],
+					[{ "string": "Wettbewerber 2" }, { "percentage": 10 }, { "percentage": 12 }, { "percentage": 12 }],
+					[{ "string": "Wettbewerber 1" }, { "percentage": 15 }, { "percentage": 14 }, { "percentage": 13 }],
+					[{ "string": "Eigene Marke" }, { "percentage": 20 }, { "percentage": 24 }, { "percentage": 27 }]
+				]
+			},
+			{
+				"name": "RightChart",
+				"table": [
+					[null, { "date": "2023-01-01" }, { "date": "2024-01-01" }, { "date": "2025-01-01" }],
+					[{ "string": "Offen" }, null, null, { "number": 9, "fill": "rgb(192,0,0)" }],
+					[{ "string": "Aufträge" }, { "number": 88 }, { "number": 97 }, { "number": 104 }]
+				]
+			}
+		]
+	}
+]

@@ -1,0 +1,17 @@
+# Build- und Testausgaben
+/build/
+/out/
+/bin/
+tests/out/
+samples/out/
+
+# Reverse-Engineering-Notizen zum Vorbild bleiben lokal (nicht Teil des Clean-Room-Codes)
+docs/think-cell-analyse.md
+docs/rethink-rekonstruktion.md
+
+# Editor/OS
+.vs/
+.vscode/
+*.user
+Thumbs.db
+~$*

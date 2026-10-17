@@ -1,0 +1,21 @@
+[
+	{
+		"template": "../samples/template.pptx",
+		"data": [
+			{
+				"name": "RightChart",
+				"table": [
+					[null, { "date": "2023-01-01" }, { "date": "2024-01-01" }, { "date": "2025-01-01" }],
+					[{ "string": "Aufträge" }, { "number": 120 }, { "number": 135 }, { "number": 158 }]
+				]
+			},
+			{
+				"name": "LeftChart",
+				"table": [
+					[null, { "date": "2023-03-01" }, { "date": "2023-06-01" }],
+					[{ "string": "A" }, { "number": 1 }, { "number": 2 }]
+				]
+			}
+		]
+	}
+]

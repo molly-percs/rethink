@@ -1,0 +1,31 @@
+[
+	{
+		"template": "out/waterfall-template.pptx",
+		"data": [
+			{ "name": "SlideTitle", "table": [[{ "string": "EBIT-Brücke 2024 → 2025 (Mio. €)" }]] },
+			{
+				"name": "Bridge",
+				"chart": { "type": "waterfall", "datatable": true, "tableRows": [2] },
+				"table": [
+					[null, { "string": "EBIT 2024" }, { "string": "Volumen" }, { "string": "Preis" }, { "string": "Kosten" }, { "string": "Zwischensumme" }, { "string": "Wechselkurs" }, { "string": "EBIT 2025" }],
+					[{ "string": "EBIT" }, { "number": 120 }, { "number": 35 }, { "number": 12.5 }, { "number": -28 }, { "string": "e" }, { "number": -6, "fill": "#C00000" }, { "string": "e" }],
+					[{ "string": "Anteil am Umsatz" }, { "percentage": 8.1 }, null, null, null, { "percentage": 8.9 }, null, { "percentage": 8.7 }]
+				]
+			}
+		]
+	},
+	{
+		"template": "out/waterfall-template.pptx",
+		"data": [
+			{ "name": "SlideTitle", "table": [[{ "string": "Kostenbrücke absteigend (e in erster Spalte)" }]] },
+			{
+				"name": "Bridge",
+				"chart": { "type": "waterfall", "datatable": true },
+				"table": [
+					[null, { "string": "Budget" }, { "string": "Personal" }, { "string": "Material" }, { "string": "IT" }, { "string": "Rest" }],
+					[{ "string": "Kosten" }, { "string": "e" }, { "number": -40 }, { "number": -25 }, { "number": -10 }, { "number": -5 }]
+				]
+			}
+		]
+	}
+]

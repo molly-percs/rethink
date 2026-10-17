@@ -1,0 +1,16 @@
+[
+	{
+		"template": "out/waterfall.pptx",
+		"data": [
+			{
+				"name": "Bridge",
+				"chart": { "decimals": 0 },
+				"table": [
+					[null, { "string": "Start" }, { "string": "Plus" }, { "string": "Minus" }, { "string": "Ende" }],
+					[{ "string": "Wert" }, { "number": 50 }, { "number": 20 }, { "number": -15 }, { "string": "e" }],
+					[{ "string": "Notiz" }, { "string": "Basis" }, null, null, { "string": "neu" }]
+				]
+			}
+		]
+	}
+]

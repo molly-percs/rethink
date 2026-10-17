@@ -1,0 +1,32 @@
+[
+	{
+		"template": "out/types.pptx",
+		"data": [
+			{
+				"name": "LineChart",
+				"table": [
+					[null, { "date": "2022-01-01" }, { "date": "2023-01-01" }, { "date": "2024-01-01" }, { "date": "2025-01-01" }],
+					[{ "string": "Plan" }, { "number": 10 }, { "number": 12 }, { "number": 15 }, { "number": 18 }],
+					[],
+					[{ "string": "Ist" }, { "number": 9 }, { "number": 13 }, { "number": 14, "fill": "#C00000" }, { "number": 20 }]
+				]
+			},
+			{
+				"name": "AreaChart",
+				"table": [
+					[null, { "string": "Q1" }, { "string": "Q2" }, { "string": "Q3" }],
+					[{ "string": "Online" }, { "number": 5 }, { "number": 7 }, { "number": 9 }],
+					[],
+					[{ "string": "Filiale" }, { "number": 8 }, { "number": 6 }, { "number": 5 }]
+				]
+			},
+			{
+				"name": "PieChart",
+				"table": [
+					[null, { "string": "A" }, { "string": "B" }, { "string": "C" }, { "string": "D" }, { "string": "E" }],
+					[{ "string": "Anteil" }, { "percentage": 40 }, { "percentage": 25 }, { "percentage": 15, "fill": "rgb(192,0,0)" }, { "percentage": 12 }, { "percentage": 8 }]
+				]
+			}
+		]
+	}
+]

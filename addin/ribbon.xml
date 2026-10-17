@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
+  <ribbon>
+    <tabs>
+      <tab id="rethinkTab" label="rethink">
+        <group id="rethinkGroupCreate" label="Erzeugen">
+          <button id="rethinkBuild" size="large" imageMso="FileOpen" onAction="RethinkBuild"
+                  label="Aus .ppttc erzeugen…"
+                  screentip="Aus .ppttc erzeugen"
+                  supertip="Wählt eine .ppttc-Datei, erzeugt daraus eine neue Präsentation und öffnet sie."/>
+        </group>
+        <group id="rethinkGroupCharts" label="Diagramme">
+          <button id="rethinkWaterfall" size="large" imageMso="ChartInsert" onAction="RethinkInsertWaterfall"
+                  label="Wasserfall einfügen"
+                  screentip="Wasserfall einfügen"
+                  supertip="Fügt einen rethink-Wasserfall mit Datentabelle ein und öffnet sein Datenblatt in Excel. Jedes Speichern (Strg+S) im Datenblatt zeichnet das Diagramm neu. „e“ in einer Zelle ist eine berechnete Summe."/>
+          <button id="rethinkDatasheet" size="large" imageMso="TableExcelSpreadsheetInsert" onAction="RethinkOpenDatasheet"
+                  label="Datenblatt öffnen"
+                  screentip="Datenblatt öffnen"
+                  supertip="Öffnet das Datenblatt des ausgewählten rethink-Diagramms in Excel (auch per Doppelklick auf das Diagramm). Speichern übernimmt die Änderungen."/>
+        </group>
+        <group id="rethinkGroupElements" label="Elemente">
+          <button id="rethinkChart" size="large" imageMso="ChartInsert" onAction="RethinkInsertChart"
+                  label="Diagramm einfügen"
+                  screentip="Diagramm einfügen"
+                  supertip="Fügt auf der aktuellen Folie ein natives Säulendiagramm ein und benennt es Chart1, Chart2 … – unter diesem Namen füllt rethink es aus einer .ppttc-Datei."/>
+          <button id="rethinkName" size="large" imageMso="SelectionPane" onAction="RethinkSetName"
+                  label="Elementname setzen"
+                  screentip="Elementname setzen"
+                  supertip="Setzt den Alternativtext „rethink:&lt;Name&gt;“ auf die ausgewählten Formen. Unter diesem Namen füllt rethink sie aus einer .ppttc-Datei."/>
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>

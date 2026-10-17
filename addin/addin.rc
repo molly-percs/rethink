@@ -1,0 +1,47 @@
+// Texte der Dialoge werden zur Laufzeit gesetzt (Umlaute), hier stehen nur Platzhalter.
+#include <winresrc.h>
+#include "version.h"
+#include "resource.h"
+
+LANGUAGE LANG_GERMAN, SUBLANG_GERMAN
+
+IDR_RIBBON RCDATA "ribbon.xml"
+
+IDD_NAME DIALOGEX 0, 0, 300, 100
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "rethink"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "", IDC_PROMPT, 7, 7, 286, 18
+    EDITTEXT        IDC_NAME, 7, 28, 286, 14, ES_AUTOHSCROLL
+    LTEXT           "", IDC_HINT, 7, 48, 286, 22
+    DEFPUSHBUTTON   "OK", IDOK, 189, 79, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 243, 79, 50, 14
+END
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION RETHINK_VERSION_RC
+ PRODUCTVERSION RETHINK_VERSION_RC
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_DLL
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040704b0"
+        BEGIN
+            VALUE "FileDescription", "rethink PowerPoint add-in"
+            VALUE "FileVersion", RETHINK_VERSION
+            VALUE "InternalName", "rethink-addin"
+            VALUE "OriginalFilename", "rethink-addin.dll"
+            VALUE "ProductName", "rethink"
+            VALUE "ProductVersion", RETHINK_VERSION
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x407, 1200
+    END
+END
