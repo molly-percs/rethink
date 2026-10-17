@@ -65,9 +65,34 @@ try {
     $api.AdjustSegment(1, 1, 1, $false)
     Expect ($slide.Shapes.Item($name).GroupItems.Item('segment r1 c1').Fill.ForeColor.RGB -eq 0x00B050) 'eigene Segmentfarbe bleibt bei Wertänderung'
 
-    # 4. Datenblatt per Excel-Automation: live ohne Speichern
+    # 4a. Eingebautes Datenblatt (Symbol unten rechts / Doppelklick)
     $slide.Shapes.Item($name).Select()
-    $file = $api.OpenDatasheet($false)
+    $api.OpenDatasheet($false)
+    Expect ($api.DatasheetCount() -eq 1) 'eingebautes Datenblatt geöffnet'
+    Expect ($api.DatasheetCell(1, 2) -eq '41' -and $api.DatasheetCell(0, 2) -eq 'Umsatz' -and $api.DatasheetCell(1, 4) -eq 'e') 'Datenblatt zeigt Kategorien, Werte und e'
+    $idsBefore = Ids $slide.Shapes.Item($name)
+    $api.DatasheetEnter(1, 2, '45')
+    Expect ($slide.Shapes.Item($name).Tags.Item('RETHINK_MODEL') -match '"number":45') 'Eingabe aktualisiert das Diagramm sofort'
+    Expect ((Ids $slide.Shapes.Item($name)) -eq $idsBefore) '… an Ort und Stelle'
+    $api.DatasheetEnter(1, 3, '-12,5')
+    Expect ($slide.Shapes.Item($name).Tags.Item('RETHINK_MODEL') -match '"number":-12.5') 'Eingabe mit deutschem Komma (-12,5)'
+    $api.DatasheetPaste(1, 5, "-8`t")
+    Expect ($slide.Shapes.Item($name).Tags.Item('RETHINK_MODEL') -match '"number":-8') 'Einfügen (Strg+V-Weg) übernimmt Werte'
+    $slide.Shapes.Item($name).Select()
+    $api.AdjustSegment(1, 2, 1, $false)
+    $cell = $api.DatasheetCell(1, 2)
+    # seit -12,5 im Datenblatt steht, zeigt das Diagramm eine Nachkommastelle → Schritt 0,1
+    Expect ($cell -eq '45,1') "▲ (Schritt 0,1) aktualisiert das offene Datenblatt (Zelle: $cell)"
+    $api.CloseDatasheet()
+    Expect ($api.DatasheetCount() -eq 0) 'Datenblatt geschlossen (nichts zu speichern)'
+    # Werte für den Excel-Teil zurücksetzen (Umsatz 41)
+    $slide.Shapes.Item($name).Select(); $api.OpenDatasheet($false)
+    $api.DatasheetEnter(1, 2, '41'); $api.DatasheetEnter(1, 3, '-35'); $api.DatasheetEnter(1, 5, '-10'); $api.DatasheetEnter(1, 6, 'e')
+    $api.CloseDatasheet()
+
+    # 4b. Alternativ: Datenblatt per Excel-Automation (Kontextmenü „In Excel bearbeiten“): live ohne Speichern
+    $slide.Shapes.Item($name).Select()
+    $file = $api.OpenExcelDatasheet($false)
     $book = $api.DatasheetWorkbook()
     Expect ($book -ne $null) "Datenblatt in Excel geöffnet ($([IO.Path]::GetFileName($file)))"
     $sheet = $book.Worksheets.Item(1)
@@ -77,7 +102,8 @@ try {
     # ▲ bei offenem Datenblatt schreibt in die Excel-Zelle
     $slide.Shapes.Item($name).Select()
     $api.AdjustSegment(1, 2, 1, $false)
-    Expect ($sheet.Range('C2').Value2 -eq 56) '▲ bei offenem Datenblatt ändert die Excel-Zelle'
+    $xlValue = $sheet.Range('C2').Value2
+    Expect ($xlValue -eq 56) "▲ bei offenem Datenblatt ändert die Excel-Zelle (Zelle: $xlValue)"
     Expect (WaitFor { $slide.Shapes.Item($name).Tags.Item('RETHINK_MODEL') -match '"number":56' }) '… und das Diagramm'
     # Farbe (kein Änderungsereignis in Excel) wird beim Schließen übernommen
     $sheet.Range('D2').Interior.Color = 192

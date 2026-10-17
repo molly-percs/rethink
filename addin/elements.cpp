@@ -3,6 +3,7 @@
 #include "elements.h"
 
 #include "datasheet.h"
+#include "datasheet_window.h"
 #include "dispatch.h"
 #include "engine/chart.h"
 #include "ppttc.h"
@@ -718,7 +719,132 @@ std::wstring insertWaterfall(IDispatch* app, bool openSheet) {
     return name;
 }
 
-std::wstring openDatasheet(IDispatch* app, bool show) {
+// ---- Eingebautes Datenblatt ----
+
+namespace {
+
+struct GridContext {
+    ComPtr<IDispatch> slide;
+    long shapeId = 0;
+    std::wstring name;
+    Datasheet* window = nullptr;
+};
+std::map<std::wstring, GridContext*> g_grids;  // Schlüssel wie beim Excel-Datenblatt (Folie + Name)
+ComPtr<IDispatch> g_gridApp;
+
+HWND powerPointFrame() {
+    HWND found = nullptr;
+    EnumThreadWindows(
+        GetCurrentThreadId(),
+        [](HWND hwnd, LPARAM param) -> BOOL {
+            wchar_t name[64] = {};
+            GetClassNameW(hwnd, name, 64);
+            if (wcscmp(name, L"PPTFrameClass") == 0 && IsWindowVisible(hwnd)) {
+                *reinterpret_cast<HWND*>(param) = hwnd;
+                return FALSE;
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&found));
+    return found ? found : GetActiveWindow();
+}
+
+RECT screenRectOf(IDispatch* app, IDispatch* element) {
+    auto window = disp::object(app, L"ActiveWindow");
+    const Rect r = rectOf(element);
+    return {disp::call(window.Get(), L"PointsToScreenPixelsX", r.left).toLong(), disp::call(window.Get(), L"PointsToScreenPixelsY", r.top).toLong(),
+            disp::call(window.Get(), L"PointsToScreenPixelsX", r.left + r.width).toLong(),
+            disp::call(window.Get(), L"PointsToScreenPixelsY", r.top + r.height).toLong()};
+}
+
+// Eingabe im Datenblatt → Element an Ort und Stelle neu zeichnen.
+void applyGridTable(GridContext& g, const std::vector<Row>& table) {
+    try {
+        auto group = findShape(g.slide.Get(), g.shapeId);
+        if (!group) throw Error(std::format("Das Diagramm '{}' ist nicht mehr auf der Folie.", narrow(g.name)));
+        const std::wstring stored = tagValue(group.Get(), kModelTag);
+        DataItem item = onWorker([&] {
+            DataItem parsed = parseDataItemJson(stored);
+            parsed.table = table;
+            return parsed;
+        });
+        auto result = renderElement(g.slide.Get(), group, item, layoutBox(group.Get()));
+        g.shapeId = disp::call(result.Get(), L"Id").toLong();
+    } catch (const std::exception& e) {
+        MessageBoxW(g.window ? datasheetWindow(g.window) : nullptr, widen(e.what()).c_str(), kTitle, MB_ICONWARNING);
+    }
+}
+
+GridContext* gridFor(IDispatch* element) {
+    auto it = g_grids.find(sheetKey(element));
+    return it == g_grids.end() ? nullptr : it->second;
+}
+
+// Datenblatt des ausgewählten Elements; ohne passende Auswahl das einzige offene Datenblatt.
+GridContext& requireGrid(IDispatch* app) {
+    ComPtr<IDispatch> element;
+    try {
+        element = rethinkElementOf(disp::object(activeWindow(app).Get(), L"Selection").Get());
+    } catch (const Error&) {
+    }
+    if (element)
+        if (GridContext* g = gridFor(element.Get())) return *g;
+    if (g_grids.size() == 1) return *g_grids.begin()->second;
+    throw Error("Für das ausgewählte Diagramm ist kein Datenblatt geöffnet.");
+}
+
+}  // namespace
+
+void openDatasheet(IDispatch* app, bool show) {
+    auto element = selectedElement(app);
+    const std::wstring key = sheetKey(element.Get());
+    if (auto it = g_grids.find(key); it != g_grids.end()) {
+        it->second->shapeId = disp::call(element.Get(), L"Id").toLong();
+        if (show) datasheetActivate(it->second->window);
+        return;
+    }
+    const std::wstring stored = tagValue(element.Get(), kModelTag);
+    std::vector<Row> table = onWorker([&] { return parseDataItemJson(stored).table; });
+
+    auto* ctx = new GridContext{disp::object(element.Get(), L"Parent"), disp::call(element.Get(), L"Id").toLong(),
+                                disp::call(element.Get(), L"Name").str(), nullptr};
+    g_gridApp = app;
+    DatasheetCallbacks callbacks;
+    callbacks.changed = [ctx](const std::vector<Row>& t) { applyGridTable(*ctx, t); };
+    callbacks.openInExcel = [ctx]() {
+        try {
+            if (g_gridApp) {
+                if (auto group = findShape(ctx->slide.Get(), ctx->shapeId)) disp::call(group.Get(), L"Select");
+                openExcelDatasheet(g_gridApp.Get(), true);
+            }
+        } catch (const std::exception& e) {
+            MessageBoxW(nullptr, widen(e.what()).c_str(), kTitle, MB_ICONWARNING);
+        }
+    };
+    callbacks.closed = [key, ctx]() {
+        g_grids.erase(key);
+        delete ctx;
+    };
+    ctx->window = openDatasheetWindow(powerPointFrame(), L"rethink – Datenblatt " + ctx->name, std::move(table), localeDecimalSeparator(),
+                                      std::move(callbacks), screenRectOf(app, element.Get()), show);
+    g_grids[key] = ctx;
+}
+
+void datasheetEnterCell(IDispatch* app, int row, int column, const std::wstring& text) {
+    datasheetEnter(requireGrid(app).window, row, column, text);
+}
+
+void datasheetPasteText(IDispatch* app, int row, int column, const std::wstring& text) {
+    datasheetPaste(requireGrid(app).window, row, column, text);
+}
+
+std::wstring datasheetCellText(IDispatch* app, int row, int column) { return datasheetText(requireGrid(app).window, row, column); }
+
+void closeDatasheet(IDispatch* app) { datasheetClose(requireGrid(app).window); }
+
+int openDatasheetCount() { return static_cast<int>(g_grids.size()); }
+
+std::wstring openExcelDatasheet(IDispatch* app, bool show) {
     auto element = selectedElement(app);
     auto slide = disp::object(element.Get(), L"Parent");
     const long shapeId = disp::call(element.Get(), L"Id").toLong();
@@ -830,6 +956,7 @@ void adjustSegment(IDispatch* app, int row, int column, int direction, bool larg
         return;
     }
     renderElement(slide.Get(), element, change.item, layoutBox(element.Get()));
+    if (GridContext* g = gridFor(element.Get())) datasheetSetTable(g->window, change.item.table);  // offenes Datenblatt mitführen
 }
 
 std::vector<SegmentInfo> segmentsOf(IDispatch* element) {
@@ -863,6 +990,10 @@ bool relayoutIfResized(IDispatch* element) {
 int watchCount() { return static_cast<int>(g_sheets.size()); }
 
 void stopDatasheetWatch() {
+    std::vector<Datasheet*> grids;
+    for (auto& [key, g] : g_grids) grids.push_back(g->window);
+    for (auto* w : grids) datasheetClose(w);
+    g_gridApp.Reset();
     if (g_timer) KillTimer(nullptr, g_timer);
     g_timer = 0;
     for (auto& [key, s] : g_sheets) {

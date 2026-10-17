@@ -1,4 +1,5 @@
 // Unit-Tests des Layout-Kerns und des Datenblatts (ohne PowerPoint, ohne Dateien).
+#include "cellinput.h"
 #include "datasheet.h"
 #include "engine/chart.h"
 
@@ -158,10 +159,29 @@ void testDatasheetRoundtrip() {
     check(back[3].size() == 4 && back[3][2].kind == CellKind::Empty, "Lücke in der Zeile bleibt");
 }
 
+void testCellInput() {
+    const std::wstring de = L",";
+    auto kindIs = [&](const wchar_t* in, CellKind k) { return parseCellInput(in, de).kind == k; };
+    check(kindIs(L"", CellKind::Empty) && kindIs(L"  ", CellKind::Empty), "Eingabe: leer");
+    check(isComputedCell(parseCellInput(L"E", de)), "Eingabe: e");
+    check(approx(parseCellInput(L"12,5", de).number, 12.5) && kindIs(L"12,5", CellKind::Number), "Eingabe: 12,5");
+    check(approx(parseCellInput(L"12.5", de).number, 12.5), "Eingabe: 12.5 (Punkt)");
+    check(approx(parseCellInput(L"1.234", de).number, 1234), "Eingabe: 1.234 als Tausender");
+    check(approx(parseCellInput(L"1.234,5", de).number, 1234.5), "Eingabe: 1.234,5");
+    check(approx(parseCellInput(L"-3", de).number, -3), "Eingabe: -3");
+    check(kindIs(L"8,1 %", CellKind::Percentage) && approx(parseCellInput(L"8,1 %", de).number, 8.1), "Eingabe: 8,1 %");
+    check(parseCellInput(L"01.03.2024", de).text == L"2024-03-01" && kindIs(L"2024-03-01", CellKind::Date), "Eingabe: Datum");
+    check(kindIs(L"Umsatz", CellKind::String) && kindIs(L"12a", CellKind::String), "Eingabe: Text");
+    check(displayCell(parseCellInput(L"12,5", de), de) == L"12,5", "Anzeige: 12,5");
+    check(displayCell(parseCellInput(L"48%", de), de) == L"48%", "Anzeige: 48%");
+    check(displayCell(parseCellInput(L"2024-03-01", de), de) == L"01.03.2024", "Anzeige: Datum");
+}
+
 }  // namespace
 
 int main() {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    testCellInput();
     testDatasheetRoundtrip();
     testEAtEnd();
     testEMid();

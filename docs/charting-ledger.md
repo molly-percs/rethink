@@ -73,9 +73,13 @@ Folienbibliothek und Vorlagen sind bewusst **nicht** Teil dieses Ziels.
 |---|---|
 | Tab „rethink“ im Menüband (Phase 2) | ✅ (Phase 2; Migration in den Projektordner läuft) |
 | Element einfügen je Diagrammtyp | 🟡 Wasserfall ✅ (COM-Ausgabe aus demselben Layout-Kern) |
-| Datenblatt (Excel) öffnen, Änderungen übernehmen und neu rendern | ✅ Speichern in Excel zeichnet neu (Werte, `e`, Zellfarben, Datumsangaben); Doppelklick öffnet das Datenblatt (per Automation nicht testbar, Klick ungeprüft) |
-| Kennzeichnung bei Auswahl (blauer Leuchtrahmen + Etikett, ohne Dokumentänderung) | ✅ |
-| Live-Aktualisierung bei jeder Zelländerung (ohne Speichern) | ⬜ |
+| Eingebautes Datenblatt (Tabellen-Look, Symbol unten rechts, Doppelklick) mit Live-Aktualisierung | ✅ Eingabe, Einfügen, Rückgängig, Zeilen/Spalten, %, Zellfarbe (Automation-Test; Maus/Tastatur von Hand ungeprüft) |
+| Datenblatt in Excel (optional): live, Schließen ohne Rückfrage | ✅ |
+| Kennzeichnung bei Auswahl (Leuchtrahmen + winziges „rethink chart“, ohne Dokumentänderung) | ✅ |
+| ▲▼-Griffe je Segment: Wert schrittweise ändern, Verbinder/Summen rechnen mit | ✅ (per Automation; Klick von Hand ungeprüft) |
+| Änderungen an Ort und Stelle (eigene Formatierung bleibt) | ✅ |
+| Größenänderung per Maus ordnet neu an | ✅ |
+| Werte durch Ziehen der Segmentkante ändern | ⬜ |
 | `.ppttc` füllt rethink-Elemente (`RETHINK_MODEL`) und Platzhalterformen | ✅ Kommandozeile (Platzhalter → Element, Neuzeichnen mit gespeicherten und überschriebenen Optionen) |
 
 ## Scheibenplan

@@ -82,18 +82,29 @@ Einrichten: `scripts\register.ps1` meldet `bin\rethink-addin.dll` für den aktue
 
 | Gruppe / Befehl | Wirkung |
 |---|---|
-| **Diagramme › Wasserfall einfügen** | Fügt auf der aktuellen Folie einen rethink-Wasserfall mit Beispieldaten und Datentabelle ein und öffnet sofort sein **Datenblatt in Excel**. |
-| **Diagramme › Datenblatt öffnen** | Öffnet das Datenblatt des ausgewählten rethink-Diagramms. Ein **Doppelklick** auf das Diagramm tut dasselbe. |
+| **Diagramme › Wasserfall einfügen** | Fügt auf der aktuellen Folie einen rethink-Wasserfall mit Beispieldaten und Datentabelle ein (ohne weitere Fenster). |
+| **Diagramme › Datenblatt öffnen** | Öffnet das eingebaute Datenblatt des ausgewählten rethink-Diagramms, ebenso das **Tabellen-Symbol unten rechts** am Diagramm oder ein **Doppelklick**. |
 | Erzeugen › Aus .ppttc erzeugen… | Präsentation aus einer `.ppttc`-Datei (wie die Kommandozeile) |
 | Elemente › Diagramm einfügen / Elementname setzen | natives Diagramm einfügen bzw. Formen für `.ppttc` benennen |
 
-**Datenblatt-Kreislauf:**
-1. Werte, Kategorien und Zeilen in Excel ändern. `e` steht für eine berechnete Summe, Zellfarben werden zu Segmentfarben.
-2. Mit **Strg+S speichern**. rethink bemerkt das innerhalb einer Sekunde und zeichnet das Diagramm an derselben Stelle neu.
+**Am ausgewählten Diagramm** zeichnet das Add-in eine Überlagerung. Sie verändert das Dokument nicht:
+- ein feiner **blauer Leuchtrahmen** mit dem winzigen Etikett „rethink chart“
+- **▲▼-Pfeile** an jedem Balken. Ein Klick ändert den Wert um einen Schritt in der Genauigkeit der Beschriftung (1, 0,1 …), mit gedrückter Umschalttaste um den zehnfachen Schritt. Verbinder und `e`-Summen rechnen sofort mit. Berechnete `e`-Balken haben keine Pfeile.
+- das **Datenblatt-Symbol** rechts unten
 
-Das Datenblatt liegt unter `%TEMP%\rethink\`, die Daten selbst stehen im Element (Tag `RETHINK_MODEL`) und reisen mit der Präsentation.
+**Eingebautes Datenblatt** (Tabellenkalkulations-Look neben dem Diagramm):
+- **Eingabe:** direkt in die Zelle tippen, Enter, Tab oder Pfeiltasten übernehmen.
+  - Zahlen mit Komma (`12,5`), Prozent (`48%`), `e` für eine berechnete Summe, Datum (`01.03.2024`)
+- **Strg+C / Strg+V** kopiert und fügt tabulatorgetrennt ein, auch aus Excel. Dazu gibt es Strg+Z und Entf.
+- **Rechtsklick:** Zeilen und Spalten einfügen oder löschen, Prozent ein/aus, Zellfarbe (wird zur Segmentfarbe), „In Excel bearbeiten“
+- **Jede Eingabe** zeichnet das Diagramm sofort neu. Zum Beenden das Fenster einfach schließen, es gibt nichts zu speichern.
 
-**Kennzeichnung:** Ein ausgewähltes rethink-Diagramm bekommt einen **blauen Leuchtrahmen** mit dem Etikett „rethink · Wasserfall · <Name>“. Das ist ein durchsichtiges Fenster über PowerPoint und verändert das Dokument nicht.
+**Alternativ in Excel:** Über das Rechtsklick-Menü öffnet sich das Datenblatt in einer eigenen Excel-Instanz. Änderungen werden ohne Speichern übernommen. Beim Schließen übernimmt rethink alles, auch Zellfarben, ohne Rückfrage, und beendet Excel danach.
+
+**Bearbeiten in der Grafik:**
+- **Wertänderungen:** Formen werden an Ort und Stelle angepasst. Eigene Formatierungen wie Segmentfarbe oder Schrift bleiben erhalten.
+- **Größe:** Ändert man sie per Maus, ordnet rethink das Diagramm nach dem Loslassen neu an.
+- **Speicherort der Daten:** im Element selbst (Tag `RETHINK_MODEL`), sie reisen mit der Präsentation.
 
 Mit dem Add-in eingefügte und per Kommandozeile erzeugte Diagramme sind dasselbe Format: Beide lassen sich hier bearbeiten und über `.ppttc` neu befüllen.
 

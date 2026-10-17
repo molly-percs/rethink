@@ -16,10 +16,19 @@ namespace rethink::addin {
 // Mit openSheet öffnet sich danach das Datenblatt. Liefert den Elementnamen.
 std::wstring insertWaterfall(IDispatch* app, bool openSheet);
 
-// Öffnet das Datenblatt des ausgewählten Elements in Excel (Automation: Änderungen werden sofort
-// übernommen, Schließen speichert ohne Rückfrage). Mit show=false bleibt Excel unsichtbar (Tests).
-// Liefert den Dateipfad.
-std::wstring openDatasheet(IDispatch* app, bool show);
+// Öffnet das eingebaute Datenblatt des ausgewählten Elements (Fenster im Tabellen-Look neben dem Diagramm).
+// Jede Eingabe zeichnet das Diagramm sofort neu; Schließen genügt. Mit show=false unsichtbar (Tests).
+void openDatasheet(IDispatch* app, bool show);
+// Für Tests: Eingabe in die Zelle (row, column wie "table") des offenen Datenblatts, Anzeige lesen, schließen.
+void datasheetEnterCell(IDispatch* app, int row, int column, const std::wstring& text);
+void datasheetPasteText(IDispatch* app, int row, int column, const std::wstring& text);
+std::wstring datasheetCellText(IDispatch* app, int row, int column);
+void closeDatasheet(IDispatch* app);
+int openDatasheetCount();
+
+// Alternative: Datenblatt in Excel (Automation: Änderungen sofort, Schließen ohne Rückfrage).
+// Mit show=false bleibt Excel unsichtbar (Tests). Liefert den Dateipfad.
+std::wstring openExcelDatasheet(IDispatch* app, bool show);
 
 // Arbeitsmappe des Datenblatts zum ausgewählten Element (für Tests), sonst nullptr.
 ComPtr<IDispatch> datasheetWorkbook(IDispatch* app);
