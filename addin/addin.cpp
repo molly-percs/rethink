@@ -49,6 +49,9 @@ enum : DISPID {
     kOpenDatasheet,
     kApplyDatasheets,
     kEventStatus,
+    kAdjustSegment,
+    kOverlayInfo,
+    kDatasheetWorkbook,
 };
 
 struct Member {
@@ -62,8 +65,22 @@ constexpr Member kMembers[] = {
     {L"GetName", kGetName},          {L"LastWarnings", kLastWarnings},        {L"Version", kVersion},
     {L"RethinkInsertWaterfall", kOnInsertWaterfall}, {L"RethinkOpenDatasheet", kOnOpenDatasheet},
     {L"InsertWaterfall", kInsertWaterfall}, {L"OpenDatasheet", kOpenDatasheet}, {L"ApplyDatasheets", kApplyDatasheets},
-    {L"EventStatus", kEventStatus},
+    {L"EventStatus", kEventStatus},  {L"AdjustSegment", kAdjustSegment}, {L"OverlayInfo", kOverlayInfo},
+    {L"DatasheetWorkbook", kDatasheetWorkbook},
 };
+
+long longArg(const DISPPARAMS* params, UINT index) {
+    if (!params || index >= params->cArgs) throw Error("Argument fehlt");
+    VARIANT value;
+    VariantInit(&value);
+    check(VariantCopyInd(&value, &params->rgvarg[params->cArgs - 1 - index]), "Argument lesen");
+    VARIANT number;
+    VariantInit(&number);
+    const HRESULT hr = VariantChangeType(&number, &value, 0, VT_I4);
+    VariantClear(&value);
+    check(hr, "Argument als Zahl lesen");
+    return number.lVal;
+}
 
 // Optionales Wahrheitswert-Argument; fehlt es, gilt `fallback`.
 bool boolArg(const DISPPARAMS* params, UINT index, bool fallback) {
@@ -211,6 +228,19 @@ public:
             case kInsertWaterfall: setString(result, insertWaterfall(app_.Get(), boolArg(params, 0, false))); return S_OK;
             case kOpenDatasheet: setString(result, openDatasheet(app_.Get(), boolArg(params, 0, false))); return S_OK;
             case kApplyDatasheets: setLong(result, applyDatasheets(app_.Get())); return S_OK;
+            case kAdjustSegment:
+                adjustSegment(app_.Get(), longArg(params, 0), longArg(params, 1), longArg(params, 2) >= 0 ? 1 : -1, boolArg(params, 3, false));
+                return S_OK;
+            case kOverlayInfo: setString(result, overlayInfo()); return S_OK;
+            case kDatasheetWorkbook: {
+                auto workbook = datasheetWorkbook(app_.Get());
+                if (result) {
+                    VariantInit(result);
+                    result->vt = VT_DISPATCH;
+                    result->pdispVal = workbook.Detach();
+                }
+                return S_OK;
+            }
             default: return DISP_E_MEMBERNOTFOUND;
             }
         } catch (const winrt::hresult_error& e) {

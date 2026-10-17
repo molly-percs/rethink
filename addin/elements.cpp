@@ -7,15 +7,19 @@
 #include "engine/chart.h"
 #include "ppttc.h"
 #include "render_element.h"
+#include "xlsx.h"
 
+#include <ocidl.h>
 #include <shellapi.h>
 
-#include <chrono>
+#include <cmath>
 #include <exception>
 #include <filesystem>
 #include <format>
 #include <map>
+#include <optional>
 #include <set>
+#include <sstream>
 #include <thread>
 
 namespace rethink::addin {
@@ -26,6 +30,9 @@ namespace {
 
 constexpr wchar_t kTitle[] = L"rethink";
 constexpr wchar_t kPrefix[] = L"rethink:";
+constexpr wchar_t kLayoutTag[] = L"RETHINK_LAYOUT";  // Layout-Rahmen und Gruppenrahmen beim letzten Zeichnen
+constexpr wchar_t kStyleTag[] = L"RETHINK_STYLE";    // zuletzt gesetzte Farbe einer Form (eigene Änderungen erkennen)
+constexpr wchar_t kSegmentTag[] = L"RETHINK_SEG";    // "pos", "neg", "e"
 constexpr long kMsoShapeRectangle = 1;
 constexpr long kMsoTextOrientationHorizontal = 1;
 constexpr long kMsoGroup = 6;
@@ -78,6 +85,15 @@ long themeColor(const std::wstring& scheme) {
     return 13;
 }
 
+std::wstring signature(const Color& c) {
+    switch (c.kind) {
+        case Color::Kind::Scheme: return L"s:" + c.scheme;
+        case Color::Kind::Rgb: return std::format(L"r:{:06X}", c.rgb);
+        case Color::Kind::None: break;
+    }
+    return L"n";
+}
+
 void applyColor(IDispatch* colorFormat, const Color& c) {
     if (c.kind == Color::Kind::Scheme)
         disp::put(colorFormat, L"ObjectThemeColor", themeColor(c.scheme));
@@ -85,7 +101,27 @@ void applyColor(IDispatch* colorFormat, const Color& c) {
         disp::put(colorFormat, L"RGB", static_cast<long>(((c.rgb >> 16) & 0xFF) | (c.rgb & 0xFF00) | ((c.rgb & 0xFF) << 16)));
 }
 
-// Eine Grundform über das Objektmodell zeichnen; liefert die neue Form.
+std::wstring tagValue(IDispatch* shape, const wchar_t* tag) {
+    try {
+        return disp::call(disp::object(shape, L"Tags").Get(), L"Item", tag).str();
+    } catch (const Error&) {
+        return {};
+    }
+}
+
+void setTag(IDispatch* shape, const wchar_t* tag, const std::wstring& value) {
+    disp::call(disp::object(shape, L"Tags").Get(), L"Add", std::wstring(tag), value);
+}
+
+void setGeometry(IDispatch* shape, const Prim& p) {
+    const Emu x = p.w < 0 ? p.x + p.w : p.x, y = p.h < 0 ? p.y + p.h : p.y;
+    disp::put(shape, L"Left", pt(x));
+    disp::put(shape, L"Top", pt(y));
+    disp::put(shape, L"Width", pt(std::abs(p.w)));
+    disp::put(shape, L"Height", pt(std::abs(p.h)));
+}
+
+// Eine Grundform über das Objektmodell zeichnen.
 ComPtr<IDispatch> drawPrim(IDispatch* shapes, const Prim& p) {
     switch (p.kind) {
         case Prim::Kind::Rect: {
@@ -122,20 +158,25 @@ ComPtr<IDispatch> drawPrim(IDispatch* shapes, const Prim& p) {
             applyColor(disp::object(font.Get(), L"Color").Get(), p.textColor);
             disp::put(disp::object(range.Get(), L"ParagraphFormat").Get(), L"Alignment",
                       p.align == Align::Left ? 1L : p.align == Align::Right ? 3L : 2L);
-            disp::put(shape.Get(), L"Left", pt(p.x));
-            disp::put(shape.Get(), L"Top", pt(p.y));
-            disp::put(shape.Get(), L"Width", pt(p.w));
-            disp::put(shape.Get(), L"Height", pt(p.h));
+            setGeometry(shape.Get(), p);
             return shape;
         }
     }
     throw Error("Unbekannte Grundform");
 }
 
-// Zeichnet alle Grundformen, gruppiert sie und versieht die Gruppe mit Name und Modell.
-ComPtr<IDispatch> drawElement(IDispatch* shapes, const Drawing& d, const std::wstring& name, const std::wstring& model) {
+// Rolle, Farbsignatur und Segmentart an einer Form vermerken.
+void markShape(IDispatch* shape, const Prim& p) {
+    disp::put(shape, L"Name", widen(p.role));
+    if (p.kind == Prim::Kind::Rect) setTag(shape, kStyleTag, signature(p.fill));
+    if (p.kind == Prim::Kind::Text) setTag(shape, kStyleTag, signature(p.textColor));
+    if (!p.flags.empty()) setTag(shape, kSegmentTag, widen(p.flags));
+}
+
+// Zeichnet alle Grundformen neu und gruppiert sie.
+ComPtr<IDispatch> drawElement(IDispatch* shapes, const Drawing& d, const std::wstring& name) {
     static unsigned long serial = GetTickCount();
-    const std::wstring stem = std::format(L"rethink {:08X}", ++serial);
+    const std::wstring stem = std::format(L"rethink tmp {:08X}", ++serial);
     std::vector<std::wstring> names;
     for (size_t i = 0; i < d.prims.size(); ++i) {
         auto shape = drawPrim(shapes, d.prims[i]);
@@ -143,7 +184,7 @@ ComPtr<IDispatch> drawElement(IDispatch* shapes, const Drawing& d, const std::ws
         disp::put(shape.Get(), L"Name", names.back());
     }
 
-    // Shapes.Range(Array(...)).Group()
+    // Shapes.Range(Array(...)).Group() – über eindeutige Zwischennamen, danach Rollennamen
     SAFEARRAY* array = SafeArrayCreateVector(VT_VARIANT, 0, static_cast<ULONG>(names.size()));
     if (!array) throw Error("Speicher für die Formenliste fehlt");
     for (LONG i = 0; i < static_cast<LONG>(names.size()); ++i) {
@@ -159,19 +200,49 @@ ComPtr<IDispatch> drawElement(IDispatch* shapes, const Drawing& d, const std::ws
     list.raw().parray = array;
     auto range = disp::invoke(shapes, L"Range", DISPATCH_METHOD | DISPATCH_PROPERTYGET, &list, 1).object();
     auto group = disp::object(range.Get(), L"Group");
+    auto items = disp::object(group.Get(), L"GroupItems");
+    for (size_t i = 0; i < d.prims.size(); ++i) markShape(disp::object(items.Get(), L"Item", names[i]).Get(), d.prims[i]);
 
     disp::put(group.Get(), L"Name", name);
     disp::put(group.Get(), L"AlternativeText", std::wstring(kPrefix) + name);
-    disp::call(disp::object(group.Get(), L"Tags").Get(), L"Add", std::wstring(kModelTag), model);
     return group;
 }
 
-std::wstring tagValue(IDispatch* shape, const wchar_t* tag) {
-    try {
-        return disp::call(disp::object(shape, L"Tags").Get(), L"Item", tag).str();
-    } catch (const Error&) {
-        return {};
+// Passt die vorhandenen Formen an, wenn dieselben Rollen vorkommen. Farben werden nur gesetzt, wenn sich
+// die Vorgabe des Modells geändert hat – eigene Formatierungen bleiben so erhalten.
+bool updateInPlace(IDispatch* group, const Drawing& d) {
+    auto items = disp::object(group, L"GroupItems");
+    const long count = disp::call(items.Get(), L"Count").toLong();
+    if (count != static_cast<long>(d.prims.size())) return false;
+    std::map<std::wstring, ComPtr<IDispatch>> byRole;
+    for (long i = 1; i <= count; ++i) {
+        auto shape = disp::object(items.Get(), L"Item", i);
+        byRole[disp::call(shape.Get(), L"Name").str()] = shape;
     }
+    for (auto& p : d.prims)
+        if (!byRole.contains(widen(p.role))) return false;
+
+    for (auto& p : d.prims) {
+        IDispatch* shape = byRole[widen(p.role)].Get();
+        setGeometry(shape, p);
+        if (p.kind == Prim::Kind::Rect) {
+            const auto sig = signature(p.fill);
+            if (tagValue(shape, kStyleTag) != sig) {
+                applyColor(disp::object(disp::object(shape, L"Fill").Get(), L"ForeColor").Get(), p.fill);
+                setTag(shape, kStyleTag, sig);
+            }
+            if (tagValue(shape, kSegmentTag) != widen(p.flags)) setTag(shape, kSegmentTag, widen(p.flags));
+        } else if (p.kind == Prim::Kind::Text) {
+            auto range = disp::object(disp::object(shape, L"TextFrame").Get(), L"TextRange");
+            if (disp::call(range.Get(), L"Text").str() != p.text) disp::put(range.Get(), L"Text", p.text);
+            const auto sig = signature(p.textColor);
+            if (tagValue(shape, kStyleTag) != sig) {
+                applyColor(disp::object(disp::object(range.Get(), L"Font").Get(), L"Color").Get(), p.textColor);
+                setTag(shape, kStyleTag, sig);
+            }
+        }
+    }
+    return true;
 }
 
 struct Prepared {
@@ -195,6 +266,67 @@ Prepared prepare(const DataItem& item, Box bounds) {
     });
 }
 
+struct Rect {
+    double left = 0, top = 0, width = 0, height = 0;
+};
+
+Rect rectOf(IDispatch* shape) {
+    return {disp::call(shape, L"Left").toDouble(), disp::call(shape, L"Top").toDouble(), disp::call(shape, L"Width").toDouble(),
+            disp::call(shape, L"Height").toDouble()};
+}
+
+// Gespeicherter Layout-Rahmen (Punkt) und Gruppenrahmen beim letzten Zeichnen.
+struct Layout {
+    Rect box, group;
+};
+
+std::optional<Layout> storedLayout(IDispatch* group) {
+    const std::wstring text = tagValue(group, kLayoutTag);
+    if (text.empty()) return std::nullopt;
+    std::wistringstream in(text);
+    Layout l;
+    wchar_t sep = 0;
+    in >> l.box.left >> sep >> l.box.top >> sep >> l.box.width >> sep >> l.box.height >> sep >> l.group.left >> sep >> l.group.top >> sep >>
+        l.group.width >> sep >> l.group.height;
+    if (in.fail()) return std::nullopt;
+    return l;
+}
+
+// Layout-Rahmen für ein erneutes Zeichnen: folgt Verschieben und Größenänderung der Gruppe
+// (die Abstände zwischen Gruppenrahmen und Layout-Rahmen bleiben erhalten).
+Box layoutBox(IDispatch* group) {
+    const Rect now = rectOf(group);
+    const auto stored = storedLayout(group);
+    if (!stored) return {emu(now.left), emu(now.top), emu(now.width), emu(now.height)};
+    const double insetL = stored->box.left - stored->group.left, insetT = stored->box.top - stored->group.top;
+    const double insetR = (stored->group.left + stored->group.width) - (stored->box.left + stored->box.width);
+    const double insetB = (stored->group.top + stored->group.height) - (stored->box.top + stored->box.height);
+    return {emu(now.left + insetL), emu(now.top + insetT), emu(std::max(now.width - insetL - insetR, 10.0)),
+            emu(std::max(now.height - insetT - insetB, 10.0))};
+}
+
+// Zeichnet ein Element (neu oder an Ort und Stelle) und vermerkt Modell und Layout.
+ComPtr<IDispatch> renderElement(IDispatch* slide, ComPtr<IDispatch> group, const DataItem& item, Box box) {
+    const Prepared prepared = prepare(item, box);
+    if (!group || !updateInPlace(group.Get(), prepared.drawing)) {
+        long zorder = 0;
+        if (group) {
+            zorder = disp::call(group.Get(), L"ZOrderPosition").toLong();
+            disp::call(group.Get(), L"Delete");
+        }
+        group = drawElement(disp::object(slide, L"Shapes").Get(), prepared.drawing, item.name);
+        if (zorder > 0)
+            for (int i = 0; i < 500 && disp::call(group.Get(), L"ZOrderPosition").toLong() > zorder; ++i)
+                disp::call(group.Get(), L"ZOrder", 3L);  // msoSendBackward: alte Stapelposition
+    }
+    setTag(group.Get(), kModelTag, prepared.model);
+    const Rect g = rectOf(group.Get());
+    const Box& b = prepared.drawing.bounds;
+    setTag(group.Get(), kLayoutTag,
+           std::format(L"{};{};{};{};{};{};{};{}", pt(b.x), pt(b.y), pt(b.w), pt(b.h), g.left, g.top, g.width, g.height));
+    return group;
+}
+
 ComPtr<IDispatch> activeWindow(IDispatch* app) {
     auto windows = disp::object(app, L"Windows");
     if (disp::call(windows.Get(), L"Count").toLong() < 1) throw Error("Es ist keine Präsentation geöffnet.");
@@ -209,16 +341,10 @@ ComPtr<IDispatch> currentSlide(IDispatch* app) {
     }
 }
 
-// Ausgewähltes rethink-Element des aktiven Fensters.
 ComPtr<IDispatch> selectedElement(IDispatch* app) {
     auto element = rethinkElementOf(disp::object(activeWindow(app).Get(), L"Selection").Get());
     if (!element) throw Error("Bitte zuerst ein rethink-Diagramm auswählen (Wasserfall einfügen oder per .ppttc erzeugen).");
     return element;
-}
-
-Box boundsOf(IDispatch* shape) {
-    return {emu(disp::call(shape, L"Left").toDouble()), emu(disp::call(shape, L"Top").toDouble()), emu(disp::call(shape, L"Width").toDouble()),
-            emu(disp::call(shape, L"Height").toDouble())};
 }
 
 std::wstring freeName(IDispatch* slide, const std::wstring& stem) {
@@ -249,21 +375,6 @@ DataItem sampleWaterfall(const std::wstring& name) {
     return item;
 }
 
-// ---- Datenblatt-Überwachung ----
-
-struct Watch {
-    fs::path file;
-    fs::file_time_type stamp;
-    ComPtr<IDispatch> slide;
-    long shapeId = 0;
-    std::wstring name;
-};
-
-std::map<std::wstring, Watch> g_watches;  // Schlüssel: Datei (klein)
-ComPtr<IDispatch> g_app;
-UINT_PTR g_timer = 0;
-bool g_busy = false;
-
 ComPtr<IDispatch> findShape(IDispatch* slide, long id) {
     auto shapes = disp::object(slide, L"Shapes");
     const long count = disp::call(shapes.Get(), L"Count").toLong();
@@ -274,62 +385,271 @@ ComPtr<IDispatch> findShape(IDispatch* slide, long id) {
     return nullptr;
 }
 
-// Zeichnet das Element einer Überwachung aus dem Datenblatt neu. Gibt false zurück, wenn sich nichts geändert hat.
-bool refresh(Watch& w) {
-    std::error_code ec;
-    const auto stamp = fs::last_write_time(w.file, ec);
-    if (ec) throw Error("Das Datenblatt wurde gelöscht.");
-    if (stamp == w.stamp) return false;
+// ---- Datenblätter ----
 
-    auto group = findShape(w.slide.Get(), w.shapeId);
-    if (!group) throw Error(std::format("Das Diagramm '{}' ist nicht mehr auf der Folie.", narrow(w.name)));
+struct Sheet {
+    fs::path file;
+    fs::file_time_type stamp{};
+    ComPtr<IDispatch> slide;
+    long shapeId = 0;
+    std::wstring name;
+    // Excel-Automation (sonst: Datei wird bei Strg+S neu eingelesen)
+    ComPtr<IDispatch> workbook;
+    ComPtr<IConnectionPoint> point;
+    DWORD cookie = 0;
+    bool dirty = false;
+    ULONGLONG dirtyAt = 0;
+    bool closePending = false;  // Nutzer schließt: im nächsten Takt übernehmen und dann selbst schließen
+    bool closingByUs = false;
+    bool closed = false;
+};
+
+std::map<std::wstring, Sheet> g_sheets;  // Schlüssel: Datei (klein)
+ComPtr<IDispatch> g_excel;               // eigene Excel-Instanz für Datenblätter
+UINT_PTR g_timer = 0;
+bool g_busy = false;
+DISPID g_sheetChange = 0x61C, g_beforeClose = 0x60A;  // aus der Typbibliothek überschrieben
+
+bool isBusy(const std::exception& e) {
+    const std::string text = e.what();
+    return text.find("0x80010001") != std::string::npos || text.find("0x8001010A") != std::string::npos;
+}
+
+// Tabelle in das Element übernehmen (an Ort und Stelle).
+void applyTable(Sheet& s, std::vector<Row> table) {
+    auto group = findShape(s.slide.Get(), s.shapeId);
+    if (!group) throw Error(std::format("Das Diagramm '{}' ist nicht mehr auf der Folie.", narrow(s.name)));
     const std::wstring stored = tagValue(group.Get(), kModelTag);
-    const auto bytes = readFileShared(w.file);
-    if (bytes.empty()) return false;  // Excel schreibt gerade
-
     DataItem item = onWorker([&] {
         DataItem parsed = parseDataItemJson(stored);
-        parsed.table = tableFromDatasheet(bytes);
+        parsed.table = std::move(table);
         return parsed;
     });
-    const Prepared prepared = prepare(item, boundsOf(group.Get()));
-    w.stamp = stamp;
+    auto result = renderElement(s.slide.Get(), group, item, layoutBox(group.Get()));
+    s.shapeId = disp::call(result.Get(), L"Id").toLong();
+}
 
-    const long zorder = disp::call(group.Get(), L"ZOrderPosition").toLong();
-    auto shapes = disp::object(w.slide.Get(), L"Shapes");
-    const std::wstring name = disp::call(group.Get(), L"Name").str();
-    disp::call(group.Get(), L"Delete");
-    auto fresh = drawElement(shapes.Get(), prepared.drawing, name, prepared.model);
-    for (int i = 0; i < 500 && disp::call(fresh.Get(), L"ZOrderPosition").toLong() > zorder; ++i)
-        disp::call(fresh.Get(), L"ZOrder", 3L);  // msoSendBackward: alte Stapelposition wiederherstellen
-    w.shapeId = disp::call(fresh.Get(), L"Id").toLong();
+// Aktuellen Inhalt der (offenen) Arbeitsmappe übernehmen, ohne sie zu speichern.
+void flushWorkbook(Sheet& s) {
+    const fs::path copy = fs::path(s.file).replace_extension(L".rethink-copy.xlsx");
+    disp::call(s.workbook.Get(), L"SaveCopyAs", copy.wstring());
+    const auto bytes = readFileShared(copy);
+    std::error_code ec;
+    fs::remove(copy, ec);
+    applyTable(s, onWorker([&] { return tableFromDatasheet(bytes); }));
+}
+
+Sheet* sheetFor(const std::wstring& key) {
+    auto it = g_sheets.find(key);
+    return it == g_sheets.end() ? nullptr : &it->second;
+}
+
+class WorkbookSink final : public IDispatch {
+public:
+    WorkbookSink(std::wstring key, GUID iid) : key_(std::move(key)), iid_(iid) {}
+    STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
+        if (!out) return E_POINTER;
+        if (iid == IID_IUnknown || iid == IID_IDispatch || iid == iid_) {
+            *out = static_cast<IDispatch*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&refs_); }
+    STDMETHODIMP_(ULONG) Release() override {
+        const ULONG n = InterlockedDecrement(&refs_);
+        if (n == 0) delete this;
+        return n;
+    }
+    STDMETHODIMP GetTypeInfoCount(UINT* c) override {
+        if (c) *c = 0;
+        return S_OK;
+    }
+    STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo** i) override {
+        if (i) *i = nullptr;
+        return E_NOTIMPL;
+    }
+    STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR*, UINT, LCID, DISPID*) override { return E_NOTIMPL; }
+    STDMETHODIMP Invoke(DISPID id, REFIID, LCID, WORD, DISPPARAMS* params, VARIANT*, EXCEPINFO*, UINT*) override {
+        Sheet* s = sheetFor(key_);
+        if (!s) return S_OK;
+        if (id == g_sheetChange) {
+            s->dirty = true;  // nur vormerken; übernommen wird im Zeitgeber auf dem PowerPoint-Thread
+            s->dirtyAt = GetTickCount64();
+        } else if (id == g_beforeClose && !s->closingByUs) {
+            // Während des Ereignisses nimmt Excel keine Aufrufe an. Daher das Schließen anhalten, im nächsten Takt
+            // die letzten Änderungen (auch Zellfarben) übernehmen und die Mappe dann ohne Rückfrage selbst schließen.
+            if (params && params->cArgs >= 1) {
+                VARIANT& cancel = params->rgvarg[0];
+                if (cancel.vt == (VT_BOOL | VT_BYREF) && cancel.pboolVal) *cancel.pboolVal = VARIANT_TRUE;
+            }
+            s->closePending = true;
+        }
+        return S_OK;
+    }
+
+private:
+    LONG refs_ = 1;
+    std::wstring key_;
+    GUID iid_;
+};
+
+void resolveWorkbookDispIds(IDispatch* workbook, const GUID& iid) {
+    ComPtr<ITypeInfo> info;
+    if (FAILED(workbook->GetTypeInfo(0, LOCALE_USER_DEFAULT, &info)) || !info) return;
+    ComPtr<ITypeLib> lib;
+    UINT index = 0;
+    if (FAILED(info->GetContainingTypeLib(&lib, &index))) return;
+    ComPtr<ITypeInfo> events;
+    if (FAILED(lib->GetTypeInfoOfGuid(iid, &events))) return;
+    LPOLESTR names[] = {const_cast<LPOLESTR>(L"SheetChange"), const_cast<LPOLESTR>(L"BeforeClose")};
+    DISPID id = 0;
+    if (SUCCEEDED(events->GetIDsOfNames(&names[0], 1, &id))) g_sheetChange = id;
+    if (SUCCEEDED(events->GetIDsOfNames(&names[1], 1, &id))) g_beforeClose = id;
+}
+
+// Abonniert SheetChange/BeforeClose der Arbeitsmappe; false, wenn Excel das nicht zulässt.
+bool connectWorkbook(Sheet& s, const std::wstring& key) {
+    ComPtr<IConnectionPointContainer> container;
+    if (FAILED(s.workbook->QueryInterface(IID_PPV_ARGS(&container)))) return false;
+    ComPtr<IEnumConnectionPoints> points;
+    if (FAILED(container->EnumConnectionPoints(&points))) return false;
+    ComPtr<IConnectionPoint> point;
+    ULONG fetched = 0;
+    if (points->Next(1, &point, &fetched) != S_OK) return false;
+    GUID iid{};
+    if (FAILED(point->GetConnectionInterface(&iid))) return false;
+    resolveWorkbookDispIds(s.workbook.Get(), iid);
+    auto* sink = new WorkbookSink(key, iid);
+    const HRESULT hr = point->Advise(sink, &s.cookie);
+    sink->Release();
+    if (FAILED(hr)) {
+        s.cookie = 0;
+        return false;
+    }
+    s.point = point;
     return true;
 }
 
+ComPtr<IDispatch> excelApp() {
+    if (g_excel) {
+        try {
+            disp::call(g_excel.Get(), L"Version");
+        } catch (...) {
+            g_excel.Reset();  // vom Nutzer beendet
+        }
+    }
+    if (!g_excel) {
+        CLSID clsid{};
+        check(CLSIDFromProgID(L"Excel.Application", &clsid), "Excel ist nicht installiert");
+        check(CoCreateInstance(clsid, nullptr, CLSCTX_LOCAL_SERVER, IID_PPV_ARGS(&g_excel)), "Excel starten");
+    }
+    return g_excel;
+}
+
+void bringToFront(Sheet& s) {
+    auto excel = excelApp();
+    disp::put(excel.Get(), L"Visible", true);
+    disp::call(s.workbook.Get(), L"Activate");
+    try {
+        SetForegroundWindow(reinterpret_cast<HWND>(static_cast<LONG_PTR>(disp::call(excel.Get(), L"Hwnd").toLong())));
+    } catch (...) {
+    }
+}
+
+bool openInExcelFile(const fs::path& file) {
+    const std::wstring quoted = L"\"" + file.wstring() + L"\"";
+    if (reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", L"excel.exe", quoted.c_str(), nullptr, SW_SHOWNORMAL)) > 32) return true;
+    return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", file.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
+}
+
+void releaseSheet(Sheet& s) {
+    if (s.point && s.cookie) s.point->Unadvise(s.cookie);
+    s.point.Reset();
+    s.cookie = 0;
+    s.workbook.Reset();
+}
+
+void quitExcelIfUnused() {
+    if (!g_excel) return;
+    for (auto& [key, s] : g_sheets)
+        if (s.workbook) return;
+    try {
+        if (disp::call(disp::object(g_excel.Get(), L"Workbooks").Get(), L"Count").toLong() == 0) disp::call(g_excel.Get(), L"Quit");
+    } catch (...) {
+    }
+    g_excel.Reset();
+}
+
+// Prüft alle Datenblätter; liefert die Zahl neu gezeichneter Elemente.
 int refreshAll(bool reportErrors) {
     if (g_busy) return 0;
     g_busy = true;
     int redrawn = 0;
     std::vector<std::wstring> finished;
-    for (auto& [key, w] : g_watches) {
+    const ULONGLONG now = GetTickCount64();
+    for (auto& [key, s] : g_sheets) {
         try {
-            if (refresh(w)) ++redrawn;
-        } catch (const std::exception& e) {
-            const std::wstring text = widen(e.what());
-            std::error_code ec;
-            const bool gone = !fs::exists(w.file, ec);
-            if (gone || text.find(L"nicht mehr auf der Folie") != std::wstring::npos) {
+            if (s.closed) {
                 finished.push_back(key);
+            } else if (s.closePending) {
+                flushWorkbook(s);  // bei "beschäftigt" wird es im nächsten Takt erneut versucht
+                s.dirty = false;
+                ++redrawn;
+                disp::put(s.workbook.Get(), L"Saved", true);
+                s.closingByUs = true;
+                disp::call(s.workbook.Get(), L"Close", false);
+                s.closed = true;
+                finished.push_back(key);
+            } else if (s.cookie) {
+                if (s.dirty && (now - s.dirtyAt >= 300 || !reportErrors)) {
+                    flushWorkbook(s);
+                    s.dirty = false;
+                    ++redrawn;
+                }
             } else {
-                w.stamp = fs::last_write_time(w.file, ec);  // dieselbe Fassung nicht erneut melden
+                std::error_code ec;
+                const auto stamp = fs::last_write_time(s.file, ec);
+                if (ec) {
+                    finished.push_back(key);
+                } else if (stamp != s.stamp) {
+                    const auto bytes = readFileShared(s.file);
+                    if (!bytes.empty()) {
+                        s.stamp = stamp;
+                        applyTable(s, onWorker([&] { return tableFromDatasheet(bytes); }));
+                        ++redrawn;
+                    }
+                }
             }
-            if (reportErrors && !gone) MessageBoxW(nullptr, (L"Datenblatt „" + w.name + L"“: " + text).c_str(), kTitle, MB_ICONWARNING);
+        } catch (const std::exception& e) {
+            if (isBusy(e)) continue;  // Excel ist beschäftigt (z. B. Zelle im Bearbeitungsmodus): beim nächsten Takt erneut
+            const std::wstring text = widen(e.what());
+            if (text.find(L"nicht mehr auf der Folie") != std::wstring::npos) finished.push_back(key);
+            s.dirty = false;
+            std::error_code ec;
+            s.stamp = fs::last_write_time(s.file, ec);  // dieselbe Fassung nicht erneut melden
+            if (reportErrors) MessageBoxW(nullptr, (L"Datenblatt „" + s.name + L"“: " + text).c_str(), kTitle, MB_ICONWARNING);
         } catch (...) {
             finished.push_back(key);  // Folie/Präsentation nicht mehr erreichbar
         }
     }
-    for (auto& key : finished) g_watches.erase(key);
-    if (g_watches.empty() && g_timer) {
+    for (auto& key : finished) {
+        if (auto* s = sheetFor(key)) {
+            if (!s->closed && s->workbook) {
+                try {
+                    disp::put(s->workbook.Get(), L"Saved", true);
+                    disp::call(s->workbook.Get(), L"Close", false);
+                } catch (...) {
+                }
+            }
+            releaseSheet(*s);
+        }
+        g_sheets.erase(key);
+    }
+    if (!finished.empty()) quitExcelIfUnused();
+    if (g_sheets.empty() && g_timer) {
         KillTimer(nullptr, g_timer);
         g_timer = 0;
     }
@@ -350,15 +670,14 @@ fs::path datasheetPath(const std::wstring& name, long slideId) {
     return dir / std::format(L"Datenblatt {} (Folie {}).xlsx", safe, slideId);
 }
 
-// Datenblätter immer mit Excel öffnen (die .xlsx-Zuordnung kann auf ein anderes Programm zeigen);
-// nur wenn Excel fehlt, die Standardzuordnung.
-bool openInExcel(const fs::path& file) {
-    const std::wstring quoted = L"\"" + file.wstring() + L"\"";
-    if (reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", L"excel.exe", quoted.c_str(), nullptr, SW_SHOWNORMAL)) > 32) return true;
-    return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", file.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
+std::wstring sheetKey(IDispatch* element) {
+    auto slide = disp::object(element, L"Parent");
+    return toLower(datasheetPath(disp::call(element, L"Name").str(), disp::call(slide.Get(), L"SlideID").toLong()).wstring());
 }
 
 }  // namespace
+
+// ---- Öffentliche Funktionen ----
 
 ComPtr<IDispatch> rethinkElementOf(IDispatch* selection) {
     if (!selection) return nullptr;
@@ -381,12 +700,6 @@ ComPtr<IDispatch> rethinkElementOf(IDispatch* selection) {
     return nullptr;
 }
 
-std::wstring elementLabel(IDispatch* element) {
-    const std::wstring model = tagValue(element, kModelTag);
-    const std::wstring kind = model.find(L"\"waterfall\"") != std::wstring::npos ? L"Wasserfall" : L"Diagramm";
-    return std::format(L"rethink · {} · {}", kind, disp::call(element, L"Name").str());
-}
-
 std::wstring insertWaterfall(IDispatch* app, bool openSheet) {
     auto slide = currentSlide(app);
     auto pageSetup = disp::object(disp::object(activeWindow(app).Get(), L"Presentation").Get(), L"PageSetup");
@@ -395,9 +708,8 @@ std::wstring insertWaterfall(IDispatch* app, bool openSheet) {
     const double width = slideWidth * 0.7, height = slideHeight * 0.6;
 
     const std::wstring name = freeName(slide.Get(), L"Wasserfall");
-    const DataItem item = sampleWaterfall(name);
-    const Prepared prepared = prepare(item, Box{emu((slideWidth - width) / 2), emu((slideHeight - height) / 2 + slideHeight * 0.05), emu(width), emu(height)});
-    auto group = drawElement(disp::object(slide.Get(), L"Shapes").Get(), prepared.drawing, name, prepared.model);
+    const Box box{emu((slideWidth - width) / 2), emu((slideHeight - height) / 2 + slideHeight * 0.05), emu(width), emu(height)};
+    auto group = renderElement(slide.Get(), nullptr, sampleWaterfall(name), box);
     try {
         disp::call(group.Get(), L"Select");
     } catch (const Error&) {
@@ -409,47 +721,167 @@ std::wstring insertWaterfall(IDispatch* app, bool openSheet) {
 std::wstring openDatasheet(IDispatch* app, bool show) {
     auto element = selectedElement(app);
     auto slide = disp::object(element.Get(), L"Parent");
-    const long slideId = disp::call(slide.Get(), L"SlideID").toLong();
     const long shapeId = disp::call(element.Get(), L"Id").toLong();
     const std::wstring name = disp::call(element.Get(), L"Name").str();
-    const std::wstring stored = tagValue(element.Get(), kModelTag);
-
-    const fs::path file = datasheetPath(name, slideId);
+    const fs::path file = datasheetPath(name, disp::call(slide.Get(), L"SlideID").toLong());
     const std::wstring key = toLower(file.wstring());
-    if (auto existing = g_watches.find(key); existing != g_watches.end()) {
-        existing->second.shapeId = shapeId;  // bereits überwacht: dieselbe Datei weiterverwenden
-        existing->second.slide = slide;
-    } else {
-        const auto bytes = onWorker([&] { return datasheetFromTable(parseDataItemJson(stored).table); });
-        HANDLE h = CreateFileW(file.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (h == INVALID_HANDLE_VALUE)
-            throw Error("Das Datenblatt ist noch in Excel geöffnet. Bitte dort weiterarbeiten oder die Datei schließen: " + narrow(file.wstring()));
-        DWORD written = 0;
-        WriteFile(h, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
-        CloseHandle(h);
-        g_watches[key] = Watch{file, fs::last_write_time(file), slide, shapeId, name};
-    }
-    g_app = app;
-    if (!g_timer) g_timer = SetTimer(nullptr, 0, 1000, onTimer);
 
-    if (show && !openInExcel(file)) throw Error("Excel konnte das Datenblatt nicht öffnen: " + narrow(file.wstring()));
+    if (Sheet* existing = sheetFor(key); existing && !existing->closed) {
+        existing->shapeId = shapeId;  // bereits geöffnet: dieselbe Mappe nach vorn holen
+        existing->slide = slide;
+        if (show) {
+            if (existing->workbook)
+                bringToFront(*existing);
+            else
+                openInExcelFile(file);
+        }
+        return file.wstring();
+    }
+
+    const std::wstring stored = tagValue(element.Get(), kModelTag);
+    const auto bytes = onWorker([&] { return datasheetFromTable(parseDataItemJson(stored).table); });
+    HANDLE h = CreateFileW(file.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        throw Error("Das Datenblatt ist noch in Excel geöffnet. Bitte dort weiterarbeiten oder die Datei schließen: " + narrow(file.wstring()));
+    DWORD written = 0;
+    WriteFile(h, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
+    CloseHandle(h);
+
+    Sheet s;
+    s.file = file;
+    s.stamp = fs::last_write_time(file);
+    s.slide = slide;
+    s.shapeId = shapeId;
+    s.name = name;
+    g_sheets[key] = s;
+    Sheet& sheet = g_sheets[key];
+
+    // Bevorzugt: eigene Excel-Instanz per Automation (Änderungen live, Schließen ohne Rückfrage).
+    try {
+        auto excel = excelApp();
+        sheet.workbook = disp::object(disp::object(excel.Get(), L"Workbooks").Get(), L"Open", file.wstring());
+        try {
+            disp::put(disp::object(disp::object(sheet.workbook.Get(), L"Windows").Get(), L"Item", 1L).Get(), L"Caption",
+                      L"rethink – Datenblatt " + name);
+        } catch (...) {
+        }
+        if (!connectWorkbook(sheet, key)) sheet.workbook.Reset();
+    } catch (...) {
+        sheet.workbook.Reset();
+    }
+    if (!g_timer) g_timer = SetTimer(nullptr, 0, 300, onTimer);
+
+    if (sheet.workbook) {
+        if (show) bringToFront(sheet);
+    } else if (show && !openInExcelFile(file)) {
+        throw Error("Excel konnte das Datenblatt nicht öffnen: " + narrow(file.wstring()));
+    }
     return file.wstring();
 }
 
-int watchCount() { return static_cast<int>(g_watches.size()); }
+ComPtr<IDispatch> datasheetWorkbook(IDispatch* app) {
+    Sheet* s = sheetFor(sheetKey(selectedElement(app).Get()));
+    return s ? s->workbook : nullptr;
+}
 
 int applyDatasheets(IDispatch*) { return refreshAll(false); }
+
+void adjustSegment(IDispatch* app, int row, int column, int direction, bool large) {
+    auto element = selectedElement(app);
+    auto slide = disp::object(element.Get(), L"Parent");
+    const std::wstring stored = tagValue(element.Get(), kModelTag);
+
+    struct Change {
+        DataItem item;
+        double value = 0;
+        bool percent = false;
+    };
+    const Change change = onWorker([&] {
+        Change c;
+        c.item = parseDataItemJson(stored);
+        if (row < 1 || static_cast<size_t>(row) >= c.item.table.size() || column < 1 ||
+            static_cast<size_t>(column) >= c.item.table[row].size())
+            throw Error("Dieses Segment gibt es nicht mehr.");
+        Cell& cell = c.item.table[row][column];
+        if (isComputedCell(cell)) throw Error("Dieses Segment wird aus „e“ berechnet und kann nicht direkt verändert werden.");
+        if (cell.kind != CellKind::Number && cell.kind != CellKind::Percentage) throw Error("Dieses Segment hat keinen Zahlenwert.");
+        const int decimals = chartDecimals(c.item, parseChartOptions(c.item.chartJson));
+        const double scale = std::pow(10.0, decimals);
+        const double step = (large ? 10.0 : 1.0) / scale;
+        cell.number = std::round((cell.number + direction * step) * scale) / scale;
+        c.value = cell.number;
+        c.percent = cell.kind == CellKind::Percentage;
+        return c;
+    });
+
+    // Ist das Datenblatt offen, ist es die Quelle: die Zelle ändern, das Änderungsereignis zeichnet neu.
+    if (Sheet* s = sheetFor(sheetKey(element.Get())); s && s->workbook && !s->closed) {
+        try {
+            auto sheet = disp::object(disp::object(s->workbook.Get(), L"Worksheets").Get(), L"Item", 1L);
+            auto cell = disp::object(sheet.Get(), L"Range", columnName(static_cast<size_t>(column)) + std::to_wstring(row + 1));
+            disp::put(cell.Get(), L"Value2", change.percent ? change.value / 100.0 : change.value);
+        } catch (const std::exception& e) {
+            if (isBusy(e)) throw Error("Excel ist gerade beschäftigt (Zelle im Bearbeitungsmodus?). Bitte die Zelle verlassen und erneut klicken.");
+            throw;
+        }
+        s->dirty = true;
+        s->dirtyAt = GetTickCount64() - 300;  // sofort übernehmen
+        refreshAll(false);
+        return;
+    }
+    renderElement(slide.Get(), element, change.item, layoutBox(element.Get()));
+}
+
+std::vector<SegmentInfo> segmentsOf(IDispatch* element) {
+    std::vector<SegmentInfo> result;
+    auto items = disp::object(element, L"GroupItems");
+    const long count = disp::call(items.Get(), L"Count").toLong();
+    for (long i = 1; i <= count; ++i) {
+        auto shape = disp::object(items.Get(), L"Item", i);
+        const std::wstring name = disp::call(shape.Get(), L"Name").str();
+        SegmentInfo s;
+        if (swscanf_s(name.c_str(), L"segment r%d c%d", &s.row, &s.column) != 2) continue;
+        s.flags = narrow(tagValue(shape.Get(), kSegmentTag));
+        const Rect r = rectOf(shape.Get());
+        s.left = r.left, s.top = r.top, s.width = r.width, s.height = r.height;
+        result.push_back(s);
+    }
+    return result;
+}
+
+bool relayoutIfResized(IDispatch* element) {
+    const auto stored = storedLayout(element);
+    if (!stored) return false;
+    const Rect now = rectOf(element);
+    if (std::fabs(now.width - stored->group.width) < 0.75 && std::fabs(now.height - stored->group.height) < 0.75) return false;
+    const std::wstring model = tagValue(element, kModelTag);
+    const DataItem item = onWorker([&] { return parseDataItemJson(model); });
+    renderElement(disp::object(element, L"Parent").Get(), element, item, layoutBox(element));
+    return true;
+}
+
+int watchCount() { return static_cast<int>(g_sheets.size()); }
 
 void stopDatasheetWatch() {
     if (g_timer) KillTimer(nullptr, g_timer);
     g_timer = 0;
-    g_watches.clear();
-    g_app.Reset();
+    for (auto& [key, s] : g_sheets) {
+        if (s.workbook) {
+            try {
+                disp::put(s.workbook.Get(), L"Saved", true);
+                disp::call(s.workbook.Get(), L"Close", false);
+            } catch (...) {
+            }
+        }
+        releaseSheet(s);
+    }
+    g_sheets.clear();
+    quitExcelIfUnused();
 }
 
 void commandInsertWaterfall(IDispatch* app) {
     try {
-        insertWaterfall(app, true);
+        insertWaterfall(app, false);  // Datenblatt erst auf Wunsch (Symbol unten rechts, Doppelklick)
     } catch (const std::exception& e) {
         MessageBoxW(nullptr, widen(e.what()).c_str(), kTitle, MB_ICONERROR);
     } catch (const winrt::hresult_error& e) {

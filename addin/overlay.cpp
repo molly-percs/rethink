@@ -11,15 +11,54 @@ namespace rethink::addin {
 namespace {
 
 constexpr wchar_t kClass[] = L"rethinkSelectionOverlay";
-constexpr int kGlow = 10;                       // Leuchtbreite außerhalb des Elements in Pixeln
-constexpr COLORREF kBlue = RGB(37, 120, 235);   // rethink-Blau
-constexpr int kBadgeHeight = 18;
+constexpr UINT kMsgAction = WM_APP + 41;
+constexpr COLORREF kBlue = RGB(37, 120, 235);  // rethink-Blau
 
 HWND g_window = nullptr;
+OverlayContent g_content;
+POINT g_origin{};  // Bildschirmposition der linken oberen Fensterecke
+OverlayCallback g_callback = nullptr;
+int g_pressed = -1;
+
+int scaled(HWND hwnd, int px) {
+    const UINT dpi = hwnd ? GetDpiForWindow(hwnd) : 96;
+    return MulDiv(px, dpi ? dpi : 96, 96);
+}
+
+// Rand des Overlay-Fensters um das Element (Leuchten, Griffe, Symbol, Etikett)
+int margin(HWND hwnd) { return scaled(hwnd, 34); }
+
+int hitHandle(POINT screen) {
+    for (size_t i = 0; i < g_content.handles.size(); ++i)
+        if (PtInRect(&g_content.handles[i].rect, screen)) return static_cast<int>(i);
+    return -1;
+}
 
 LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    if (msg == WM_NCHITTEST) return HTTRANSPARENT;
-    if (msg == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
+    switch (msg) {
+        case WM_NCHITTEST: {
+            // Nur Griffe und Symbol sind anklickbar; alles andere geht an PowerPoint (gleicher Thread).
+            const POINT p{static_cast<short>(LOWORD(lParam)), static_cast<short>(HIWORD(lParam))};
+            return hitHandle(p) >= 0 ? HTCLIENT : HTTRANSPARENT;
+        }
+        case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+        case WM_SETCURSOR: SetCursor(LoadCursorW(nullptr, IDC_HAND)); return TRUE;
+        case WM_LBUTTONDOWN: {
+            POINT p{static_cast<short>(LOWORD(lParam)), static_cast<short>(HIWORD(lParam))};
+            ClientToScreen(hwnd, &p);
+            g_pressed = hitHandle(p);
+            if (g_pressed >= 0) PostMessageW(hwnd, kMsgAction, static_cast<WPARAM>(g_pressed), (wParam & MK_SHIFT) ? 1 : 0);
+            return 0;
+        }
+        case kMsgAction: {
+            const int index = static_cast<int>(wParam);
+            if (g_callback && index >= 0 && index < static_cast<int>(g_content.handles.size())) {
+                const OverlayHandle handle = g_content.handles[index];  // Kopie: der Rückruf baut das Overlay neu auf
+                g_callback(handle, lParam != 0);
+            }
+            return 0;
+        }
+    }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
@@ -36,8 +75,8 @@ HWND ensureWindow(HWND owner) {
         RegisterClassExW(&wc);
         registered = true;
     }
-    g_window = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, kClass, L"", WS_POPUP, 0, 0, 1, 1,
-                               owner, nullptr, module, nullptr);
+    g_window = CreateWindowExW(WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, kClass, L"", WS_POPUP, 0, 0, 1, 1, owner, nullptr, module,
+                               nullptr);
     return g_window;
 }
 
@@ -48,21 +87,61 @@ std::uint32_t pixel(COLORREF color, double alpha) {
     return (a << 24) | (r << 16) | (g << 8) | b;
 }
 
+class Canvas {
+public:
+    Canvas(std::uint32_t* px, int w, int h) : px_(px), w_(w), h_(h) {}
+    void blend(int x, int y, COLORREF c, double alpha) {
+        if (x < 0 || y < 0 || x >= w_ || y >= h_ || alpha <= 0) return;
+        std::uint32_t& d = px_[y * w_ + x];
+        const double da = (d >> 24) / 255.0, a = std::min(alpha, 1.0);
+        const double out = a + da * (1 - a);
+        auto channel = [&](int shift, int src) {
+            const double dc = ((d >> shift) & 0xFF) / 255.0;  // vorbelegt
+            return static_cast<std::uint32_t>(std::clamp((src / 255.0) * a + dc * (1 - a), 0.0, 1.0) * 255 + 0.5);
+        };
+        d = (static_cast<std::uint32_t>(out * 255 + 0.5) << 24) | (channel(16, GetRValue(c)) << 16) | (channel(8, GetGValue(c)) << 8) |
+            channel(0, GetBValue(c));
+    }
+    void fill(const RECT& r, COLORREF c, double alpha) {
+        for (int y = r.top; y < r.bottom; ++y)
+            for (int x = r.left; x < r.right; ++x) blend(x, y, c, alpha);
+    }
+    // Dreieck mit Spitze nach oben (up) oder unten, weiße Kontur für Sichtbarkeit auf Segmenten
+    void triangle(const RECT& r, bool up) {
+        const double cx = (r.left + r.right) / 2.0, half = (r.right - r.left) / 2.0;
+        for (int y = r.top; y < r.bottom; ++y) {
+            const double t = (y + 0.5 - r.top) / (r.bottom - r.top);  // 0 oben … 1 unten
+            const double w = half * (up ? t : 1 - t);
+            for (int x = r.left; x < r.right; ++x) {
+                const double d = std::fabs(x + 0.5 - cx);
+                if (d <= w - 1.0) blend(x, y, kBlue, 1.0);
+                else if (d <= w + 0.6) blend(x, y, RGB(255, 255, 255), 0.95);
+            }
+        }
+    }
+
+private:
+    std::uint32_t* px_;
+    int w_, h_;
+};
+
 }  // namespace
 
-void showOverlay(HWND owner, const RECT& rect, const std::wstring& label) {
+void showOverlay(HWND owner, const OverlayContent& content, OverlayCallback callback) {
     HWND hwnd = ensureWindow(owner);
     if (!hwnd) return;
+    g_content = content;
+    g_callback = callback;
 
-    // Fenster = Element + Leuchtrand + Platz für das Etikett oberhalb
-    const int innerW = std::max<int>(rect.right - rect.left, 1), innerH = std::max<int>(rect.bottom - rect.top, 1);
-    const int width = innerW + 2 * kGlow, height = innerH + 2 * kGlow + kBadgeHeight;
-    const int originX = rect.left - kGlow, originY = rect.top - kGlow - kBadgeHeight;
+    const int m = margin(owner), glow = scaled(owner, 9);
+    const RECT& e = content.element;
+    const int width = std::max<int>(e.right - e.left, 1) + 2 * m, height = std::max<int>(e.bottom - e.top, 1) + 2 * m;
+    g_origin = {e.left - m, e.top - m};
 
     BITMAPINFO info{};
     info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     info.bmiHeader.biWidth = width;
-    info.bmiHeader.biHeight = -height;  // von oben nach unten
+    info.bmiHeader.biHeight = -height;
     info.bmiHeader.biPlanes = 1;
     info.bmiHeader.biBitCount = 32;
     info.bmiHeader.biCompression = BI_RGB;
@@ -77,46 +156,77 @@ void showOverlay(HWND owner, const RECT& rect, const std::wstring& label) {
     }
     HGDIOBJ previous = SelectObject(dc, bitmap);
     auto* px = static_cast<std::uint32_t*>(bits);
+    std::fill(px, px + static_cast<size_t>(width) * height, 0u);
+    Canvas canvas(px, width, height);
 
-    // Leuchtrahmen: kräftige Linie am Elementrand, nach außen weich auslaufend, innen dezenter Schimmer
-    const int left = kGlow, top = kGlow + kBadgeHeight, right = left + innerW, bottom = top + innerH;
-    for (int y = kBadgeHeight; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
+    // Leuchtrahmen: feine Kante am Element, weich nach außen auslaufend
+    const int left = m, top = m, right = width - m, bottom = height - m;
+    for (int y = top - glow; y < bottom + glow; ++y) {
+        for (int x = left - glow; x < right + glow; ++x) {
             const int dx = x < left ? left - x : (x >= right ? x - right + 1 : 0);
             const int dy = y < top ? top - y : (y >= bottom ? y - bottom + 1 : 0);
             double alpha = 0;
             if (dx == 0 && dy == 0) {
                 const int inside = std::min({x - left, right - 1 - x, y - top, bottom - 1 - y});
-                if (inside < 2) alpha = 0.95;                 // Kante
-                else if (inside < 6) alpha = 0.18 * (6 - inside) / 4.0;  // Schimmer nach innen
+                if (inside < 1) alpha = 0.9;
+                else if (inside < 4) alpha = 0.12 * (4 - inside) / 3.0;
             } else {
                 const double d = std::sqrt(static_cast<double>(dx * dx + dy * dy));
-                if (d <= kGlow) alpha = 0.55 * std::pow(1.0 - d / kGlow, 1.6);
+                if (d <= glow) alpha = 0.45 * std::pow(1.0 - d / glow, 1.7);
             }
-            px[y * width + x] = pixel(kBlue, alpha);
+            canvas.blend(x, y, kBlue, alpha);
         }
     }
 
-    // Etikett oben links: blaue Fläche mit weißem Text
-    HFONT font = CreateFontW(-12, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                             CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-    HGDIOBJ oldFont = SelectObject(dc, font);
-    SIZE textSize{};
-    GetTextExtentPoint32W(dc, label.c_str(), static_cast<int>(label.size()), &textSize);
-    RECT badge{left, 0, std::min(left + static_cast<int>(textSize.cx) + 14, width), kBadgeHeight - 2};
-    HBRUSH brush = CreateSolidBrush(kBlue);
-    FillRect(dc, &badge, brush);
-    DeleteObject(brush);
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, RGB(255, 255, 255));
-    RECT textRect = badge;
-    DrawTextW(dc, label.c_str(), static_cast<int>(label.size()), &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    SelectObject(dc, oldFont);
+    // Winziges, unaufdringliches Etikett über dem Rahmen
+    HFONT font = CreateFontW(-scaled(owner, 9), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                             ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    {
+        // GDI-Text in eine eigene Maske zeichnen und als Alpha übernehmen
+        const wchar_t* label = L"rethink chart";
+        HDC maskDc = CreateCompatibleDC(screen);
+        BITMAPINFO maskInfo = info;
+        void* maskBits = nullptr;
+        HBITMAP mask = CreateDIBSection(maskDc, &maskInfo, DIB_RGB_COLORS, &maskBits, nullptr, 0);
+        if (mask) {
+            HGDIOBJ oldMask = SelectObject(maskDc, mask);
+            HGDIOBJ oldFont = SelectObject(maskDc, font);
+            SetBkMode(maskDc, TRANSPARENT);
+            SetTextColor(maskDc, RGB(255, 255, 255));
+            RECT textRect{left, top - glow - scaled(owner, 13), width, top - glow};
+            DrawTextW(maskDc, label, -1, &textRect, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_NOPREFIX);
+            const auto* mp = static_cast<const std::uint32_t*>(maskBits);
+            for (int i = 0; i < width * height; ++i) {
+                const double coverage = (mp[i] & 0xFF) / 255.0;
+                if (coverage > 0) canvas.blend(i % width, i / width, kBlue, 0.85 * coverage);
+            }
+            SelectObject(maskDc, oldFont);
+            SelectObject(maskDc, oldMask);
+            DeleteObject(mask);
+        }
+        DeleteDC(maskDc);
+    }
     DeleteObject(font);
-    for (int y = badge.top; y < badge.bottom; ++y)
-        for (int x = badge.left; x < badge.right; ++x) px[y * width + x] |= 0xFF000000;  // GDI setzt kein Alpha
 
-    POINT position{originX, originY}, source{0, 0};
+    // Griffe und Datenblatt-Symbol (Fensterkoordinaten)
+    for (auto& h : content.handles) {
+        RECT r = h.rect;
+        OffsetRect(&r, -g_origin.x, -g_origin.y);
+        if (h.action == OverlayAction::Datasheet) {
+            canvas.fill(r, kBlue, 1.0);
+            // stilisiertes Tabellenraster
+            const int w = r.right - r.left, hh = r.bottom - r.top;
+            for (int i = 1; i <= 2; ++i) {
+                const int x = r.left + w * i / 3, y = r.top + hh * i / 3;
+                canvas.fill({x, r.top + 3, x + 1, r.bottom - 3}, RGB(255, 255, 255), 0.95);
+                canvas.fill({r.left + 3, y, r.right - 3, y + 1}, RGB(255, 255, 255), 0.95);
+            }
+        } else {
+            canvas.triangle(r, h.action == OverlayAction::Up);
+        }
+    }
+
+    POINT position = g_origin, source{0, 0};
     SIZE size{width, height};
     BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
     UpdateLayeredWindow(hwnd, screen, &position, &size, dc, &source, 0, &blend, ULW_ALPHA);
@@ -130,8 +240,15 @@ void showOverlay(HWND owner, const RECT& rect, const std::wstring& label) {
 
 void hideOverlay() {
     if (g_window) ShowWindow(g_window, SW_HIDE);
+    g_content = {};
 }
 
 bool overlayVisible() { return g_window && IsWindowVisible(g_window); }
+
+RECT overlayRect() {
+    RECT r{};
+    if (g_window) GetWindowRect(g_window, &r);
+    return r;
+}
 
 }  // namespace rethink::addin

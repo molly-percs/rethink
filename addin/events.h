@@ -13,4 +13,7 @@ void stopEvents();
 // Diagnose für Tests: Verbindung, Ereignis-IDs, Anzahl empfangener Ereignisse, Overlay sichtbar.
 std::wstring eventStatus();
 
+// Diagnose für Tests: Overlay-Fenster, Elementrechteck und alle Griffe in Bildschirmpixeln.
+std::wstring overlayInfo();
+
 }  // namespace rethink::addin
