@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -7,11 +8,54 @@
 namespace rethink::engine {
 
 // Diagrammtypen des Layout-Kerns; weitere folgen gemäß docs/charting-ledger.md.
-enum class ChartType { Waterfall };
+enum class ChartType { Waterfall, Gantt };
+
+// Ausrichtung eines Säulendiagramms: Richtung, in die die Werte wachsen (Einfügemenü: Pfeile um das Symbol).
+//   Up = Säulen nach oben (Standard), Down = an der Waagerechten gespiegelt, Right/Left = Balken nach rechts/links.
+enum class Orientation { Up, Down, Right, Left };
+
+// ---- Gantt (Zeitplan) ----
+
+enum class TimeUnit { Day, Week, Month, Quarter, Year };
+enum class WeekendMode { Plain, Shaded, Hidden };
+enum class BarLabel { None, Range, Start, End };
+
+// Frei gesetztes Zeitelement (nicht an Datenblattdaten gebunden), Teil von "chart.items".
+struct GanttItem {
+    enum class Kind { Bar, Pentagon, Chevron, Milestone, Bracket, Shade } kind = Kind::Bar;
+    int row = 0;             // Zeile in "table" (1 = Meilensteinzeile unter dem Diagramm); Schattierungen: ohne Bedeutung
+    std::wstring start;      // ISO-Datum (Meilenstein: sein Datum)
+    std::wstring end;        // ISO-Datum, ausschließlich (wie im Datenblatt: Ende 00:00 Uhr)
+    std::wstring text;       // Text im Fünfeck/Chevron bzw. an der Klammer; leer = Datum
+    std::optional<std::uint32_t> fill;
+};
+
+struct GanttOptions {
+    std::wstring start, end;           // sichtbarer Bereich (ISO, beide Tage eingeschlossen); leer = an die Daten angepasst
+    std::vector<TimeUnit> scales;      // gezeigte Kalenderskalen, grob → fein; leer = automatisch
+    WeekendMode weekends = WeekendMode::Shaded;
+    int weekendFirst = 6, weekendLast = 7;  // ISO-Wochentage (1 = Montag … 7 = Sonntag)
+    int weekStart = 1;                 // erster Wochentag
+    bool separators = true;            // senkrechte Trennlinien an den Skaleneinheiten
+    BarLabel barLabels = BarLabel::None;
+    bool milestoneLabels = true;
+    bool milestoneLines = false;       // Linie über alle Zeilen an den Meilensteinen der Meilensteinzeile
+    std::wstring dateFormat;           // Format der Datumsbeschriftungen an Elementen; leer = "dd.MM."
+    std::wstring dayFormat, weekFormat, monthFormat, quarterFormat, yearFormat;  // Skalenformate; leer = Vorgabe
+    std::optional<bool> responsible, remark;  // Beschriftungsspalten; ohne Angabe: sichtbar, wenn es Einträge gibt
+    bool headlines = true;
+    bool rowSeparators = false;
+    std::vector<int> shadedRows;       // Zeilen ("table"-Index) mit Hintergrund
+    bool todayLine = false;            // Heute-Linie (gestrichelt)
+    std::wstring today;                // ihr Datum (ISO); leer = referenceDay
+    std::vector<GanttItem> items;
+    double referenceDay = 0;           // heutiges Datum (Tage seit 1970), vom Aufrufer gesetzt: Vorgabebereich ohne Daten
+};
 
 // Darstellungsoptionen eines gezeichneten rethink-Diagramms ("chart"-Objekt in .ppttc / RETHINK_MODEL).
 struct ChartOptions {
     ChartType type = ChartType::Waterfall;
+    Orientation orientation = Orientation::Up;
     bool dataTable = false;          // Datentabelle unter dem Diagramm
     std::vector<int> tableRows;      // Datenblattzeilen (Index in "table"), die nur in der Tabelle stehen
     bool segmentLabels = true;
@@ -21,6 +65,8 @@ struct ChartOptions {
     double fontPt = 12;
     double gap = 0.5;                // Lücke zwischen Säulen relativ zur Säulenbreite
     std::wstring decimalSeparator = L",";
+    std::wstring language = L"de";   // Sprache der Kalenderbeschriftungen ("de", "en")
+    GanttOptions gantt;
 };
 
 }  // namespace rethink::engine

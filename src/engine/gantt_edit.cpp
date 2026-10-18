@@ -1,0 +1,260 @@
+#include "gantt_edit.h"
+
+#include "dates.h"
+
+#include <algorithm>
+#include <charconv>
+#include <cmath>
+#include <format>
+#include <stdexcept>
+#include <string_view>
+
+namespace rethink::engine {
+namespace {
+
+using namespace gantt;
+
+Cell& cellAt(DataItem& item, int r, int c) {
+    if (static_cast<int>(item.table.size()) <= r) item.table.resize(r + 1);
+    Row& row = item.table[r];
+    if (static_cast<int>(row.size()) <= c) row.resize(c + 1);
+    return row[c];
+}
+
+const Cell* cellIf(const DataItem& item, int r, int c) {
+    if (r < 0 || r >= static_cast<int>(item.table.size()) || c < 0 || c >= static_cast<int>(item.table[r].size())) return nullptr;
+    return &item.table[r][c];
+}
+
+void setDate(DataItem& item, int r, int c, double t) {
+    Cell& cell = cellAt(item, r, c);
+    cell.kind = CellKind::Date;
+    cell.text = isoDate(t);
+    cell.number = 0;
+}
+
+void clearCell(DataItem& item, int r, int c) {
+    if (Cell* cell = const_cast<Cell*>(cellIf(item, r, c))) *cell = Cell{};
+}
+
+// Elementzeilen ab `from` um `delta` verschieben (Einfügen/Löschen von Zeilen).
+void shiftRows(ChartOptions& options, int from, int delta) {
+    for (auto& it : options.gantt.items)
+        if (it.row >= from) it.row += delta;
+    for (auto& r : options.gantt.shadedRows)
+        if (r >= from) r += delta;
+}
+
+// "bar r12" mit Präfix "bar r" → 12; genau Präfix + Zahl.
+bool roleNumber(const std::string& role, std::string_view prefix, int& n) {
+    if (!role.starts_with(prefix) || role.size() == prefix.size()) return false;
+    const auto digits = std::string_view(role).substr(prefix.size());
+    const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), n);
+    return error == std::errc() && end == digits.data() + digits.size();
+}
+
+}  // namespace
+
+GanttTarget ganttTarget(const DataItem& item, const ChartOptions& options, const std::string& role) {
+    GanttTarget t;
+    int n = -1;
+    if (roleNumber(role, "bar r", n)) {
+        const Cell *s = cellIf(item, n, kStartCol), *e = cellIf(item, n, kEndCol);
+        const auto sd = s ? cellDate(*s) : std::nullopt, ed = e ? cellDate(*e) : std::nullopt;
+        if (!sd || !ed) return t;
+        t.kind = GanttTarget::Kind::Bar, t.row = n, t.start = *sd, t.end = *ed;
+    } else if (roleNumber(role, "milestone r", n)) {
+        const Cell* m = cellIf(item, n, kMilestoneCol);
+        const auto md = m ? cellDate(*m) : std::nullopt;
+        if (!md) return t;
+        t.kind = GanttTarget::Kind::Milestone, t.row = n, t.start = t.end = *md;
+    } else if (roleNumber(role, "item ", n) && n >= 0 && n < static_cast<int>(options.gantt.items.size())) {
+        const GanttItem& it = options.gantt.items[n];
+        const auto s = parseIsoDate(it.start), e = parseIsoDate(it.end);
+        if (!s) return t;
+        t.item = n, t.row = it.row, t.start = *s, t.end = e.value_or(*s);
+        switch (it.kind) {
+            case GanttItem::Kind::Milestone: t.kind = GanttTarget::Kind::Milestone; break;
+            case GanttItem::Kind::Bracket: t.kind = GanttTarget::Kind::Bracket; break;
+            case GanttItem::Kind::Shade: t.kind = GanttTarget::Kind::Shade; break;
+            default: t.kind = GanttTarget::Kind::Bar; break;
+        }
+        if (t.kind != GanttTarget::Kind::Milestone && !e) t.kind = GanttTarget::Kind::None;
+    }
+    return t;
+}
+
+void setGanttDates(DataItem& item, ChartOptions& options, const GanttTarget& target, double start, double end) {
+    if (target.kind == GanttTarget::Kind::None) return;
+    if (target.item >= 0) {
+        GanttItem& it = options.gantt.items.at(target.item);
+        it.start = isoDate(start);
+        if (target.kind != GanttTarget::Kind::Milestone) it.end = isoDate(end);
+        return;
+    }
+    if (target.kind == GanttTarget::Kind::Milestone) {
+        setDate(item, target.row, kMilestoneCol, start);
+    } else {
+        setDate(item, target.row, kStartCol, start);
+        setDate(item, target.row, kEndCol, end);
+    }
+}
+
+std::pair<double, double> ganttDragDates(const GanttAxis& axis, const GanttTarget& target, GanttGrip grip, double dx, TimeUnit unit) {
+    const int ws = axis.weekStart;
+    if (target.kind == GanttTarget::Kind::Milestone) {
+        // Meilensteine stehen in der Tagesmitte (Tagesskala) bzw. am Tagesanfang: der Tag unter der Maus zählt
+        const double shown = axis.dayScale ? std::floor(target.start) + 0.5 : std::floor(target.start);
+        const double at = axis.dateAt(axis.xOf(shown) + dx);
+        const double day = unit == TimeUnit::Day ? std::floor(at) : snapToUnit(at, unit, ws);
+        return {day, day};
+    }
+    const double s = target.start, e = target.end;
+    switch (grip) {
+        case GanttGrip::Start: {
+            double t = snapToUnit(axis.dateAt(axis.xOf(s) + dx), unit, ws);
+            if (t > e - 1) t = e - 1;  // mindestens ein Tag
+            return {t, e};
+        }
+        case GanttGrip::End: {
+            double t = snapToUnit(axis.dateAt(axis.xOf(e) + dx), unit, ws);
+            if (t < s + 1) t = s + 1;
+            return {s, t};
+        }
+        case GanttGrip::Move: {
+            const double moved = snapToUnit(axis.dateAt(axis.xOf(s) + dx), unit, ws);
+            const double shift = std::round(moved - s);  // ganze Tage: die Dauer bleibt erhalten
+            return {s + shift, e + shift};
+        }
+    }
+    return {s, e};
+}
+
+std::pair<double, double> ganttRangeDrag(const GanttAxis& axis, bool startSide, double dx, TimeUnit unit) {
+    const int ws = axis.weekStart;
+    double t0 = axis.t0, t1 = axis.t1;
+    if (startSide) {
+        t0 = snapToUnit(axis.dateAt(static_cast<double>(axis.x0) + dx), unit, ws);
+        if (t0 >= t1) t0 = static_cast<double>(unitStart(t1 - 1e-6, unit, ws));
+        if (t0 >= t1) t0 = t1 - 1;
+    } else {
+        t1 = snapToUnit(axis.dateAt(static_cast<double>(axis.x0 + axis.w) + dx), unit, ws);
+        if (t1 <= t0) t1 = static_cast<double>(nextUnit(unitStart(t0, unit, ws), unit));
+        if (t1 <= t0) t1 = t0 + 1;
+    }
+    return {t0, t1};
+}
+
+std::wstring ganttTooltip(double t, const std::wstring& language) {
+    return formatDate(t, L"ddd dd.MM.yyyy", language) + L" · " + formatDate(t, L"www", language);
+}
+
+void setGanttRange(ChartOptions& options, double t0, double t1) {
+    options.gantt.start = isoDate(std::floor(t0));
+    options.gantt.end = isoDate(std::ceil(t1 - 1e-9) - 1);  // letzter sichtbarer Tag
+}
+
+bool fitGanttRange(const DataItem& item, ChartOptions& options) {
+    const auto range = ganttDataRange(item, options);
+    if (!range) return false;
+    setGanttRange(options, std::floor(range->first), std::ceil(range->second - 1e-9));
+    return true;
+}
+
+int insertGanttRow(DataItem& item, ChartOptions& options, int before, const std::wstring& label) {
+    while (static_cast<int>(item.table.size()) < kFirstActivityRow) item.table.push_back(Row{});
+    before = std::clamp(before, kFirstActivityRow, static_cast<int>(item.table.size()));
+    Row row(1);
+    row[0] = Cell{CellKind::String, label, 0, std::nullopt};
+    item.table.insert(item.table.begin() + before, std::move(row));
+    shiftRows(options, before, 1);
+    return before;
+}
+
+void duplicateGanttRow(DataItem& item, ChartOptions& options, int row, bool above) {
+    if (row < kFirstActivityRow || row >= static_cast<int>(item.table.size())) throw std::invalid_argument("Diese Zeile gibt es nicht");
+    const Row copy = item.table[row];
+    const int at = above ? row : row + 1;
+    item.table.insert(item.table.begin() + at, copy);
+    // Frei gesetzte Elemente der Zeile mitkopieren
+    std::vector<GanttItem> added;
+    for (auto& it : options.gantt.items)
+        if (it.row == row && it.kind != GanttItem::Kind::Shade) added.push_back(it);
+    shiftRows(options, at, 1);
+    for (auto& it : added) {
+        it.row = at;
+        options.gantt.items.push_back(it);
+    }
+}
+
+void deleteGanttRow(DataItem& item, ChartOptions& options, int row) {
+    if (row < kFirstActivityRow || row >= static_cast<int>(item.table.size())) throw std::invalid_argument("Diese Zeile gibt es nicht");
+    item.table.erase(item.table.begin() + row);
+    auto& items = options.gantt.items;
+    items.erase(std::remove_if(items.begin(), items.end(), [&](const GanttItem& it) { return it.row == row && it.kind != GanttItem::Kind::Shade; }),
+                items.end());
+    auto& shaded = options.gantt.shadedRows;
+    shaded.erase(std::remove(shaded.begin(), shaded.end(), row), shaded.end());
+    shiftRows(options, row + 1, -1);
+}
+
+bool moveGanttRow(DataItem& item, ChartOptions& options, int row, int delta) {
+    const int target = row + delta;
+    if (row < kFirstActivityRow || target < kFirstActivityRow || row >= static_cast<int>(item.table.size()) ||
+        target >= static_cast<int>(item.table.size()))
+        return false;
+    std::swap(item.table[row], item.table[target]);
+    for (auto& it : options.gantt.items) {
+        if (it.row == row) it.row = target;
+        else if (it.row == target) it.row = row;
+    }
+    for (auto& r : options.gantt.shadedRows) {
+        if (r == row) r = target;
+        else if (r == target) r = row;
+    }
+    return true;
+}
+
+void addGanttItem(DataItem& item, ChartOptions& options, GanttItem::Kind kind, int row, double date, double days) {
+    const double day = std::floor(date);
+    const bool activity = row >= kFirstActivityRow && row < static_cast<int>(item.table.size());
+    if (kind == GanttItem::Kind::Bar && activity) {
+        const Cell *s = cellIf(item, row, kStartCol), *e = cellIf(item, row, kEndCol);
+        if ((!s || !cellDate(*s)) && (!e || !cellDate(*e))) {
+            setDate(item, row, kStartCol, day);
+            setDate(item, row, kEndCol, day + days);
+            return;
+        }
+    }
+    if (kind == GanttItem::Kind::Milestone && (activity || row == kMilestoneRow)) {
+        const Cell* m = cellIf(item, row, kMilestoneCol);
+        if (!m || !cellDate(*m)) {
+            setDate(item, row, kMilestoneCol, day);
+            return;
+        }
+    }
+    if (kind != GanttItem::Kind::Shade && kind != GanttItem::Kind::Milestone && kind != GanttItem::Kind::Bracket && !activity)
+        throw std::invalid_argument("Balken gehören in eine Aktivitätszeile");
+    GanttItem it;
+    it.kind = kind;
+    it.row = row;
+    it.start = isoDate(day);
+    if (kind != GanttItem::Kind::Milestone) it.end = isoDate(day + days);
+    options.gantt.items.push_back(it);
+}
+
+void deleteGanttTarget(DataItem& item, ChartOptions& options, const GanttTarget& target) {
+    if (target.kind == GanttTarget::Kind::None) return;
+    if (target.item >= 0) {
+        options.gantt.items.erase(options.gantt.items.begin() + target.item);
+        return;
+    }
+    if (target.kind == GanttTarget::Kind::Milestone) {
+        clearCell(item, target.row, kMilestoneCol);
+    } else {
+        clearCell(item, target.row, kStartCol);
+        clearCell(item, target.row, kEndCol);
+    }
+}
+
+}  // namespace rethink::engine

@@ -1,4 +1,4 @@
-# Erzeugt aus einer .ppttc-Datei eine Präsentation mit rethink und öffnet sie in PowerPoint.
+﻿# Erzeugt aus einer .ppttc-Datei eine Präsentation mit rethink und öffnet sie in PowerPoint.
 # Aufruf:  .\ausprobieren.ps1                    (nimmt samples\sample.ppttc)
 #          .\ausprobieren.ps1 -Ppttc daten.ppttc
 param([string]$Ppttc = (Join-Path $PSScriptRoot 'samples\sample.ppttc'))

@@ -1,4 +1,4 @@
-# Prüft "Daten bearbeiten": Öffnet für jedes Diagramm die eingebettete Arbeitsmappe in PowerPoint
+﻿# Prüft "Daten bearbeiten": Öffnet für jedes Diagramm die eingebettete Arbeitsmappe in PowerPoint
 # und vergleicht Reihen, Werte und Kategorien vor und nach dem Aktivieren. Ändert sich etwas,
 # passen Formeln (Sheet1!$B$n) und Arbeitsmappe nicht zusammen.
 # Arbeitet auf einer Kopie; PowerPoint und Excel öffnen sich dabei kurz (minimiert).

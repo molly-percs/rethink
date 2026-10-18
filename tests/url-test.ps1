@@ -1,4 +1,4 @@
-# Prüft Vorlagen per http-URL: Ein lokaler Webserver (nur localhost) liefert samples/template.pptx aus.
+﻿# Prüft Vorlagen per http-URL: Ein lokaler Webserver (nur localhost) liefert samples/template.pptx aus.
 param([Parameter(Mandatory)][string]$Exe, [int]$Port = 18731)
 $ErrorActionPreference = 'Stop'
 $template = (Resolve-Path (Join-Path $PSScriptRoot '..\samples\template.pptx')).Path

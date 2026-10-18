@@ -1,4 +1,4 @@
-# Prüft eine von rethink erzeugte Präsentation:
+﻿# Prüft eine von rethink erzeugte Präsentation:
 #  1. eingebettete Arbeitsmappen (Rohdaten) direkt aus dem ZIP lesen
 #  2. Datei in PowerPoint ohne Fenster öffnen, Texte und Diagrammreihen ausgeben
 #  3. optional jede Folie als PNG exportieren

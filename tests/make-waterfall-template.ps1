@@ -1,4 +1,4 @@
-# Erzeugt tests/out/waterfall-template.pptx ohne PowerPoint: nimmt samples/template.pptx,
+﻿# Erzeugt tests/out/waterfall-template.pptx ohne PowerPoint: nimmt samples/template.pptx,
 # behält den Folientitel und ersetzt Diagramme und Beschriftungen durch ein Rechteck "Bridge" als Platzhalter.
 param([string]$Out = (Join-Path $PSScriptRoot 'out\waterfall-template.pptx'))
 $ErrorActionPreference = 'Stop'

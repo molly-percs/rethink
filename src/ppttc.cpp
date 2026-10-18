@@ -10,6 +10,7 @@
 #undef GetObject
 #endif
 
+#include <algorithm>
 #include <format>
 #include <fstream>
 #include <iterator>
@@ -166,6 +167,133 @@ double optionalNumber(const JsonObject& o, const wchar_t* key, double fallback) 
     return v.GetNumber();
 }
 
+std::wstring optionalString(const JsonObject& o, const wchar_t* key, const std::wstring& fallback, const char* where = "chart") {
+    if (!o.HasKey(key)) return fallback;
+    auto v = o.GetNamedValue(key);
+    if (v.ValueType() != JsonValueType::String) fail(where, std::format("\"{}\" muss eine Zeichenkette sein", narrow(key)));
+    return std::wstring(v.GetString());
+}
+
+// Zeichenkette aus einer festen Auswahl; liefert den Index in `choices`.
+template <size_t N>
+int optionalChoice(const JsonObject& o, const wchar_t* key, const wchar_t* const (&choices)[N], int fallback, const char* where = "chart") {
+    if (!o.HasKey(key)) return fallback;
+    const std::wstring value = optionalString(o, key, L"", where);
+    for (size_t i = 0; i < N; ++i)
+        if (value == choices[i]) return static_cast<int>(i);
+    std::string list;
+    for (size_t i = 0; i < N; ++i) list += (i ? ", " : "") + std::string("\"") + narrow(choices[i]) + "\"";
+    fail(where, std::format("\"{}\" muss einer der Werte {} sein", narrow(key), list));
+}
+
+std::vector<int> intList(const JsonObject& o, const wchar_t* key) {
+    std::vector<int> result;
+    if (!o.HasKey(key)) return result;
+    auto v = o.GetNamedValue(key);
+    if (v.ValueType() != JsonValueType::Array) fail("chart", std::format("\"{}\" muss ein Array von Zeilennummern sein", narrow(key)));
+    for (auto const& r : v.GetArray()) {
+        if (r.ValueType() != JsonValueType::Number) fail("chart", std::format("\"{}\" muss ein Array von Zeilennummern sein", narrow(key)));
+        result.push_back(static_cast<int>(r.GetNumber()));
+    }
+    return result;
+}
+
+constexpr const wchar_t* kOrientations[] = {L"up", L"down", L"right", L"left"};
+constexpr const wchar_t* kUnits[] = {L"day", L"week", L"month", L"quarter", L"year"};
+constexpr const wchar_t* kWeekendModes[] = {L"plain", L"shaded", L"hidden"};
+constexpr const wchar_t* kWeekends[] = {L"sat-sun", L"fri-sat", L"thu-fri", L"fri", L"sun"};
+constexpr int kWeekendDays[][2] = {{6, 7}, {5, 6}, {4, 5}, {5, 5}, {7, 7}};
+constexpr const wchar_t* kWeekdays[] = {L"monday", L"tuesday", L"wednesday", L"thursday", L"friday", L"saturday", L"sunday"};
+constexpr const wchar_t* kBarLabels[] = {L"none", L"range", L"start", L"end"};
+constexpr const wchar_t* kItemKinds[] = {L"bar", L"pentagon", L"chevron", L"milestone", L"bracket", L"shade"};
+
+void checkDate(const std::wstring& value, const std::string& where, const char* key) {
+    if (!value.empty() && !std::regex_match(value, kDate))
+        fail(where, std::format("\"{}\" muss ein ISO-8601-Datum sein, z. B. \"2026-11-02\"", key));
+}
+
+void parseGantt(const JsonObject& o, engine::GanttOptions& g) {
+    g.start = optionalString(o, L"start", g.start);
+    g.end = optionalString(o, L"end", g.end);
+    checkDate(g.start, "chart", "start");
+    checkDate(g.end, "chart", "end");
+    if (o.HasKey(L"scales")) {
+        auto v = o.GetNamedValue(L"scales");
+        if (v.ValueType() == JsonValueType::Array) {
+            for (auto const& s : v.GetArray()) {
+                if (s.ValueType() != JsonValueType::String) fail("chart", "\"scales\" muss \"auto\" oder ein Array wie [\"month\", \"week\"] sein");
+                const std::wstring name(s.GetString());
+                const auto it = std::find_if(std::begin(kUnits), std::end(kUnits), [&](const wchar_t* u) { return name == u; });
+                if (it == std::end(kUnits)) fail("chart", std::format("unbekannte Skala \"{}\" (day, week, month, quarter, year)", narrow(name)));
+                g.scales.push_back(static_cast<engine::TimeUnit>(it - std::begin(kUnits)));
+            }
+        } else if (v.ValueType() != JsonValueType::String || std::wstring(v.GetString()) != L"auto") {
+            fail("chart", "\"scales\" muss \"auto\" oder ein Array wie [\"month\", \"week\"] sein");
+        }
+    }
+    g.weekends = static_cast<engine::WeekendMode>(optionalChoice(o, L"weekends", kWeekendModes, static_cast<int>(g.weekends)));
+    if (o.HasKey(L"weekend")) {
+        const int w = optionalChoice(o, L"weekend", kWeekends, 0);
+        g.weekendFirst = kWeekendDays[w][0], g.weekendLast = kWeekendDays[w][1];
+    }
+    g.weekStart = optionalChoice(o, L"weekStart", kWeekdays, g.weekStart - 1) + 1;
+    g.separators = optionalBool(o, L"separators", g.separators);
+    g.barLabels = static_cast<engine::BarLabel>(optionalChoice(o, L"barLabels", kBarLabels, static_cast<int>(g.barLabels)));
+    g.milestoneLabels = optionalBool(o, L"milestoneLabels", g.milestoneLabels);
+    g.milestoneLines = optionalBool(o, L"milestoneLines", g.milestoneLines);
+    g.dateFormat = optionalString(o, L"dateFormat", g.dateFormat);
+    if (o.HasKey(L"formats")) {
+        auto v = o.GetNamedValue(L"formats");
+        if (v.ValueType() != JsonValueType::Object) fail("chart", "\"formats\" muss ein Objekt wie {\"month\": \"MMM\"} sein");
+        const JsonObject f = v.GetObject();
+        g.dayFormat = optionalString(f, L"day", g.dayFormat, "chart.formats");
+        g.weekFormat = optionalString(f, L"week", g.weekFormat, "chart.formats");
+        g.monthFormat = optionalString(f, L"month", g.monthFormat, "chart.formats");
+        g.quarterFormat = optionalString(f, L"quarter", g.quarterFormat, "chart.formats");
+        g.yearFormat = optionalString(f, L"year", g.yearFormat, "chart.formats");
+    }
+    if (o.HasKey(L"responsible")) g.responsible = optionalBool(o, L"responsible", false);
+    if (o.HasKey(L"remark")) g.remark = optionalBool(o, L"remark", false);
+    g.headlines = optionalBool(o, L"headlines", g.headlines);
+    g.rowSeparators = optionalBool(o, L"rowSeparators", g.rowSeparators);
+    g.shadedRows = intList(o, L"shadedRows");
+    if (o.HasKey(L"today")) {
+        auto v = o.GetNamedValue(L"today");
+        if (v.ValueType() == JsonValueType::Boolean) {
+            g.todayLine = v.GetBoolean();
+        } else {
+            g.today = optionalString(o, L"today", L"");
+            checkDate(g.today, "chart", "today");
+            g.todayLine = !g.today.empty();
+        }
+    }
+    if (o.HasKey(L"items")) {
+        auto v = o.GetNamedValue(L"items");
+        if (v.ValueType() != JsonValueType::Array) fail("chart", "\"items\" muss ein Array sein");
+        const JsonArray items = v.GetArray();
+        for (uint32_t i = 0; i < items.Size(); ++i) {
+            const std::string where = std::format("chart.items[{}]", i);
+            if (items.GetAt(i).ValueType() != JsonValueType::Object) fail(where, "Element muss ein Objekt sein");
+            const JsonObject e = items.GetAt(i).GetObject();
+            engine::GanttItem it;
+            it.kind = static_cast<engine::GanttItem::Kind>(optionalChoice(e, L"kind", kItemKinds, 0, where.c_str()));
+            if (e.HasKey(L"row")) {
+                if (e.GetNamedValue(L"row").ValueType() != JsonValueType::Number) fail(where, "\"row\" muss eine Zeilennummer sein");
+                it.row = static_cast<int>(e.GetNamedNumber(L"row"));
+            }
+            it.start = optionalString(e, L"start", L"", where.c_str());
+            it.end = optionalString(e, L"end", L"", where.c_str());
+            checkDate(it.start, where, "start");
+            checkDate(it.end, where, "end");
+            if (it.start.empty()) fail(where, "\"start\" fehlt");
+            if (it.kind != engine::GanttItem::Kind::Milestone && it.end.empty()) fail(where, "\"end\" fehlt");
+            it.text = optionalString(e, L"text", L"", where.c_str());
+            if (e.HasKey(L"fill")) it.fill = parseFill(optionalString(e, L"fill", L"", where.c_str()), where);
+            g.items.push_back(it);
+        }
+    }
+}
+
 }  // namespace
 
 DataItem parseDataItemJson(const std::wstring& json) {
@@ -200,11 +328,15 @@ std::wstring mergeChartJson(const std::wstring& stored, const std::wstring& over
 engine::ChartOptions parseChartOptions(const std::wstring& json) {
     const JsonObject o = parseObject(json, "\"chart\"");
     engine::ChartOptions options;
-    const std::wstring type = o.HasKey(L"type") ? std::wstring(o.GetNamedString(L"type")) : L"waterfall";
+    const std::wstring type = optionalString(o, L"type", L"waterfall");
     if (type == L"waterfall")
         options.type = engine::ChartType::Waterfall;
+    else if (type == L"gantt")
+        options.type = engine::ChartType::Gantt;
     else
         fail("chart", std::format("Diagrammtyp \"{}\" ist in rethink noch nicht umgesetzt (siehe docs/charting-ledger.md)", narrow(type)));
+    options.orientation = static_cast<engine::Orientation>(optionalChoice(o, L"orientation", kOrientations, 0));
+    if (options.type == engine::ChartType::Gantt) parseGantt(o, options.gantt);
 
     options.dataTable = optionalBool(o, L"datatable", options.dataTable);
     options.segmentLabels = optionalBool(o, L"labels", options.segmentLabels);
@@ -225,6 +357,49 @@ engine::ChartOptions parseChartOptions(const std::wstring& json) {
     if (options.fontPt < 4 || options.fontPt > 72) fail("chart", "\"fontSize\" muss zwischen 4 und 72 liegen");
     if (options.gap < 0 || options.gap > 5) fail("chart", "\"gap\" muss zwischen 0 und 5 liegen");
     return options;
+}
+
+std::wstring ganttEditsJson(const engine::GanttOptions& g) {
+    JsonObject o;
+    o.SetNamedValue(L"start", JsonValue::CreateStringValue(g.start));
+    o.SetNamedValue(L"end", JsonValue::CreateStringValue(g.end));
+    if (g.scales.empty()) {
+        o.SetNamedValue(L"scales", JsonValue::CreateStringValue(L"auto"));
+    } else {
+        JsonArray scales;
+        for (auto u : g.scales) scales.Append(JsonValue::CreateStringValue(kUnits[static_cast<int>(u)]));
+        o.SetNamedValue(L"scales", scales);
+    }
+    o.SetNamedValue(L"weekends", JsonValue::CreateStringValue(kWeekendModes[static_cast<int>(g.weekends)]));
+    for (size_t i = 0; i < std::size(kWeekends); ++i)
+        if (kWeekendDays[i][0] == g.weekendFirst && kWeekendDays[i][1] == g.weekendLast) o.SetNamedValue(L"weekend", JsonValue::CreateStringValue(kWeekends[i]));
+    o.SetNamedValue(L"weekStart", JsonValue::CreateStringValue(kWeekdays[std::clamp(g.weekStart, 1, 7) - 1]));
+    o.SetNamedValue(L"separators", JsonValue::CreateBooleanValue(g.separators));
+    o.SetNamedValue(L"barLabels", JsonValue::CreateStringValue(kBarLabels[static_cast<int>(g.barLabels)]));
+    o.SetNamedValue(L"milestoneLabels", JsonValue::CreateBooleanValue(g.milestoneLabels));
+    o.SetNamedValue(L"milestoneLines", JsonValue::CreateBooleanValue(g.milestoneLines));
+    if (g.responsible) o.SetNamedValue(L"responsible", JsonValue::CreateBooleanValue(*g.responsible));
+    if (g.remark) o.SetNamedValue(L"remark", JsonValue::CreateBooleanValue(*g.remark));
+    o.SetNamedValue(L"headlines", JsonValue::CreateBooleanValue(g.headlines));
+    o.SetNamedValue(L"rowSeparators", JsonValue::CreateBooleanValue(g.rowSeparators));
+    if (!g.today.empty() && g.todayLine) o.SetNamedValue(L"today", JsonValue::CreateStringValue(g.today));
+    else o.SetNamedValue(L"today", JsonValue::CreateBooleanValue(g.todayLine));
+    JsonArray shaded;
+    for (int r : g.shadedRows) shaded.Append(JsonValue::CreateNumberValue(r));
+    o.SetNamedValue(L"shadedRows", shaded);
+    JsonArray items;
+    for (auto& it : g.items) {
+        JsonObject e;
+        e.SetNamedValue(L"kind", JsonValue::CreateStringValue(kItemKinds[static_cast<int>(it.kind)]));
+        e.SetNamedValue(L"row", JsonValue::CreateNumberValue(it.row));
+        e.SetNamedValue(L"start", JsonValue::CreateStringValue(it.start));
+        if (!it.end.empty()) e.SetNamedValue(L"end", JsonValue::CreateStringValue(it.end));
+        if (!it.text.empty()) e.SetNamedValue(L"text", JsonValue::CreateStringValue(it.text));
+        if (it.fill) e.SetNamedValue(L"fill", JsonValue::CreateStringValue(std::format(L"#{:06X}", *it.fill)));
+        items.Append(e);
+    }
+    o.SetNamedValue(L"items", items);
+    return std::wstring(o.Stringify());
 }
 
 std::vector<SlideSpec> parsePpttc(const std::filesystem::path& file) {

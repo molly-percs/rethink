@@ -1,4 +1,4 @@
-# Erzeugt tests/out/types.pptx: je ein Linien- (mit Markern), Flächen- und Kreisdiagramm.
+﻿# Erzeugt tests/out/types.pptx: je ein Linien- (mit Markern), Flächen- und Kreisdiagramm.
 param([string]$Out = (Join-Path $PSScriptRoot 'out\types.pptx'))
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force (Split-Path $Out) | Out-Null

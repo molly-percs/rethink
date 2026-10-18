@@ -19,4 +19,7 @@ inline constexpr wchar_t kModelTag[] = L"RETHINK_MODEL";
 int renderChartElements(Package& pkg, IOpcPart* slidePart, const XmlDoc& slide, std::vector<Relationship>& slideRels,
                         const DataItem& item, std::vector<std::string>& warnings);
 
+// Umgebung des Nutzers in die Optionen übernehmen: Dezimaltrennzeichen, Sprache der Kalenderbeschriftungen, heutiges Datum.
+void applyLocale(engine::ChartOptions& options);
+
 }  // namespace rethink

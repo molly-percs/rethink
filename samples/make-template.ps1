@@ -1,4 +1,4 @@
-# Erzeugt samples/template.pptx über das PowerPoint-Objektmodell:
+﻿# Erzeugt samples/template.pptx über das PowerPoint-Objektmodell:
 # eine Folie mit Titel, zwei Beschriftungen und zwei nativen Diagrammen, deren Formnamen
 # den Namen in sample.ppttc entsprechen.
 param([string]$Out = (Join-Path $PSScriptRoot 'template.pptx'))

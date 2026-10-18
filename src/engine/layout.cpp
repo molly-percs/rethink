@@ -1,4 +1,5 @@
 #include "chart.h"
+#include "draw.h"
 
 #include <algorithm>
 #include <cmath>
@@ -6,21 +7,12 @@
 #include <stdexcept>
 
 namespace rethink::engine {
+
+Drawing layoutGantt(const DataItem& item, const ChartOptions& options, Box bounds);  // gantt.cpp
+
 namespace {
 
-// Typografische Näherungen; die COM-Ausgabe kann später echt messen.
-Emu textHeight(double pt) { return static_cast<Emu>(pt * 1.35 * kEmuPerPt); }
-Emu textWidth(const std::wstring& s, double pt) { return static_cast<Emu>(s.size() * pt * 0.55 * kEmuPerPt); }
-
-Color seriesColor(int row) { return Color::schemeColor(std::format(L"accent{}", (row - 1) % 6 + 1)); }
-
-// Lesbare Schriftfarbe auf einer Füllung.
-Color contrastOn(const Color& fill) {
-    if (fill.kind != Color::Kind::Rgb) return Color::schemeColor(L"bg1");
-    const double r = ((fill.rgb >> 16) & 0xFF) / 255.0, g = ((fill.rgb >> 8) & 0xFF) / 255.0, b = (fill.rgb & 0xFF) / 255.0;
-    const double luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    return luminance > 0.55 ? Color::schemeColor(L"tx1") : Color::schemeColor(L"bg1");
-}
+using namespace draw;
 
 int autoDecimals(const std::vector<double>& values) {
     int decimals = 0;
@@ -37,147 +29,230 @@ int autoDecimals(const std::vector<double>& values) {
     return decimals;
 }
 
-Prim text(Emu x, Emu y, Emu w, Emu h, std::wstring s, double pt, Align align, Color color, std::string role) {
-    Prim p;
-    p.kind = Prim::Kind::Text;
-    p.x = x, p.y = y, p.w = w, p.h = h;
-    p.text = std::move(s);
-    p.fontPt = pt;
-    p.align = align;
-    p.textColor = std::move(color);
-    p.role = std::move(role);
-    return p;
-}
+// Gemeinsame Teile beider Wasserfall-Ausrichtungen
+struct WaterfallBase {
+    std::vector<WaterfallColumn> columns;
+    std::vector<int> tableRows;  // Zeilen der Datentabelle: alle nicht leeren Datenzeilen in Blattreihenfolge
+    int decimals = 0;
+    double vmin = 0, vmax = 0;
+};
 
-Prim line(Emu x1, Emu y1, Emu x2, Emu y2, Color color, double pt, std::string role) {
-    Prim p;
-    p.kind = Prim::Kind::Line;
-    p.x = x1, p.y = y1, p.w = x2 - x1, p.h = y2 - y1;
-    p.stroke = std::move(color);
-    p.strokePt = pt;
-    p.role = std::move(role);
-    return p;
-}
-
-Drawing layoutWaterfall(const DataItem& item, const ChartOptions& o, Box b) {
-    Drawing d;
-    d.bounds = b;
-    const auto columns = computeWaterfall(item, o, &d.warnings);
-    const size_t n = columns.size();
-
-    const int decimals = chartDecimals(item, o);
-    auto fmt = [&](double v, bool percent) { return formatValue(v, decimals, o.decimalSeparator, percent); };
-
-    // Zeilen der Datentabelle: alle nicht leeren Datenzeilen in Blattreihenfolge
-    std::vector<int> tableRows;
+WaterfallBase waterfallBase(const DataItem& item, const ChartOptions& o, Drawing& d) {
+    WaterfallBase w;
+    w.columns = computeWaterfall(item, o, &d.warnings);
+    w.decimals = chartDecimals(item, o);
     if (o.dataTable)
         for (size_t r = 1; r < item.table.size(); ++r)
-            if (!item.table[r].empty()) tableRows.push_back(static_cast<int>(r));
+            if (!item.table[r].empty()) w.tableRows.push_back(static_cast<int>(r));
+    for (auto& c : w.columns)
+        for (auto& s : c.segments) {
+            w.vmin = std::min(w.vmin, s.lo);
+            w.vmax = std::max(w.vmax, s.hi);
+        }
+    if (w.vmax - w.vmin < 1e-12) w.vmax = w.vmin + 1;
+    return w;
+}
+
+// Text einer Tabellenzelle: "e" zeigt den berechneten Wert
+std::wstring tableValue(const DataItem& item, const WaterfallBase& w, const ChartOptions& o, int r, size_t j) {
+    const Row& row = item.table[r];
+    if (j + 1 >= row.size()) return {};
+    const Cell& cell = row[j + 1];
+    if (isComputedCell(cell)) {
+        for (auto& s : w.columns[j].segments)
+            if (s.row == r && s.computed) return formatValue(s.value, w.decimals, o.decimalSeparator, s.percent);
+        return {};
+    }
+    if (cell.kind == CellKind::Number || cell.kind == CellKind::Percentage)
+        return formatValue(cell.number, w.decimals, o.decimalSeparator, cell.kind == CellKind::Percentage);
+    return cellText(cell);
+}
+
+Prim segmentRect(const WaterfallSegment& s, size_t j, Emu x, Emu y, Emu w, Emu h) {
+    Prim p = rect(x, y, w, h, s.fill ? Color::rgbColor(*s.fill) : seriesColor(s.row), std::format("segment r{} c{}", s.row, j + 1));
+    p.flags = s.computed ? "e" : s.value < 0 ? "neg" : "pos";
+    p.value = s.value;
+    return p;
+}
+
+std::wstring categoryText(const DataItem& item, size_t j) {
+    const Row& head = item.table.front();
+    return j + 1 < head.size() ? cellText(head[j + 1]) : L"";
+}
+
+// Säulen nach oben (Up) oder an der Waagerechten gespiegelt (Down: Werte wachsen nach unten, Kategorien oben).
+Drawing layoutWaterfallVertical(const DataItem& item, const ChartOptions& o, Box b) {
+    Drawing d;
+    d.bounds = b;
+    const bool down = o.orientation == Orientation::Down;
+    d.valueDirection = o.orientation;
+    WaterfallBase w = waterfallBase(item, o, d);
+    const size_t n = w.columns.size();
 
     const Emu th = textHeight(o.fontPt);
     Emu namesW = 0;
-    for (int r : tableRows) namesW = std::max(namesW, textWidth(cellText(item.table[r].front()), o.fontPt));
+    for (int r : w.tableRows) namesW = std::max(namesW, textWidth(cellText(item.table[r].front()), o.fontPt));
     if (namesW > 0) namesW += th / 2;
 
-    const Emu top = o.segmentLabels ? th + th / 4 : th / 4;
+    const Emu labelPad = o.segmentLabels ? th + th / 4 : th / 4;  // Platz für Beschriftungen außerhalb (Werteseite)
     const Emu catH = o.categoryLabels ? th + th / 2 : 0;
     const Emu rowH = th + th / 3;
-    const Emu tableH = static_cast<Emu>(tableRows.size()) * rowH;
-    Box plot{b.x + namesW, b.y + top, b.w - namesW, b.h - top - catH - tableH};
+    const Emu tableH = static_cast<Emu>(w.tableRows.size()) * rowH;
+    const Emu plotH = b.h - labelPad - catH - tableH;
+    Box plot{b.x + namesW, down ? b.y + catH : b.y + labelPad, b.w - namesW, plotH};
     if (plot.w <= 0 || plot.h <= th) throw std::invalid_argument("Platzhalter ist zu klein für Diagramm und Tabelle");
 
-    double vmin = 0, vmax = 0;
-    for (auto& c : columns)
-        for (auto& s : c.segments) {
-            vmin = std::min(vmin, s.lo);
-            vmax = std::max(vmax, s.hi);
-        }
-    if (vmax - vmin < 1e-12) vmax = vmin + 1;
     // Platz für Beschriftungen außerhalb negativer Säulen
-    if (vmin < 0 && o.segmentLabels) vmin -= (vmax - vmin) * th / static_cast<double>(plot.h);
-    auto yOf = [&](double v) { return plot.y + static_cast<Emu>(std::llround((vmax - v) / (vmax - vmin) * plot.h)); };
+    if (w.vmin < 0 && o.segmentLabels) w.vmin -= (w.vmax - w.vmin) * th / static_cast<double>(plot.h);
+    auto yOf = [&](double v) {
+        const double f = down ? (v - w.vmin) / (w.vmax - w.vmin) : (w.vmax - v) / (w.vmax - w.vmin);
+        return plot.y + static_cast<Emu>(std::llround(f * plot.h));
+    };
 
     const double slot = static_cast<double>(plot.w) / n;
     const Emu colW = static_cast<Emu>(slot / (1.0 + o.gap));
     auto colX = [&](size_t j) { return plot.x + static_cast<Emu>(j * slot + (slot - colW) / 2.0); };
 
-    // Segmente und Beschriftungen
     for (size_t j = 0; j < n; ++j) {
-        for (auto& s : columns[j].segments) {
-            Prim rect;
-            rect.kind = Prim::Kind::Rect;
-            rect.x = colX(j);
-            rect.y = yOf(s.hi);
-            rect.w = colW;
-            rect.h = std::max<Emu>(yOf(s.lo) - yOf(s.hi), 1);
-            rect.fill = s.fill ? Color::rgbColor(*s.fill) : seriesColor(s.row);
-            rect.role = std::format("segment r{} c{}", s.row, j + 1);
-            rect.flags = s.computed ? "e" : s.value < 0 ? "neg" : "pos";
-            rect.value = s.value;
-            d.prims.push_back(rect);
-
+        for (auto& s : w.columns[j].segments) {
+            const Emu y0 = yOf(s.lo), y1 = yOf(s.hi);
+            const Prim r = segmentRect(s, j, colX(j), std::min(y0, y1), colW, std::abs(y0 - y1));
+            d.prims.push_back(r);
             if (!o.segmentLabels) continue;
-            const std::wstring label = fmt(s.value, s.percent);
-            const bool fits = rect.h >= th && colW >= textWidth(label, o.fontPt) + th / 4;
-            if (fits) {
-                d.prims.push_back(text(rect.x, rect.y, rect.w, rect.h, label, o.fontPt, Align::Center, contrastOn(rect.fill),
-                                       std::format("label r{} c{}", s.row, j + 1)));
+            const std::wstring label = formatValue(s.value, w.decimals, o.decimalSeparator, s.percent);
+            const std::string role = std::format("label r{} c{}", s.row, j + 1);
+            if (r.h >= th && colW >= textWidth(label, o.fontPt) + th / 4) {
+                d.prims.push_back(text(r.x, r.y, r.w, r.h, label, o.fontPt, Align::Center, contrastOn(r.fill), role));
             } else {
-                const bool above = s.value >= 0;
-                const Emu y = above ? rect.y - th : rect.y + rect.h;
-                d.prims.push_back(text(rect.x - colW / 2, y, colW * 2, th, label, o.fontPt, Align::Center, Color::schemeColor(L"tx1"),
-                                       std::format("label r{} c{}", s.row, j + 1)));
+                const bool towardsTop = (s.value >= 0) != down;  // außerhalb am wachsenden Ende
+                const Emu y = towardsTop ? r.y - th : r.y + r.h;
+                d.prims.push_back(text(r.x - colW / 2, y, colW * 2, th, label, o.fontPt, Align::Center, Color::schemeColor(L"tx1"), role));
             }
         }
     }
 
-    // Verbinder zwischen benachbarten Säulen
-    if (o.connectors) {
+    if (o.connectors)
         for (size_t j = 0; j + 1 < n; ++j) {
-            const Emu y = yOf(columns[j].levelAfter);
-            Prim c = line(colX(j) + colW, y, colX(j + 1), y, Color::schemeColor(L"tx1"), 0.5, std::format("connector c{}", j + 1));
-            d.prims.push_back(c);
+            const Emu y = yOf(w.columns[j].levelAfter);
+            d.prims.push_back(line(colX(j) + colW, y, colX(j + 1), y, Color::schemeColor(L"tx1"), 0.5, std::format("connector c{}", j + 1)));
         }
-    }
 
-    // Basislinie
     d.prims.push_back(line(plot.x, yOf(0), plot.x + plot.w, yOf(0), Color::schemeColor(L"tx1"), 0.75, "baseline"));
 
-    // Kategoriebeschriftungen
     const Emu plotBottom = plot.y + plot.h;
     if (o.categoryLabels) {
-        const Row& head = item.table.front();
-        for (size_t j = 0; j < n; ++j) {
-            const std::wstring label = j + 1 < head.size() ? cellText(head[j + 1]) : L"";
-            d.prims.push_back(text(plot.x + static_cast<Emu>(j * slot), plotBottom + th / 4, static_cast<Emu>(slot), th, label, o.fontPt,
-                                   Align::Center, Color::schemeColor(L"tx1"), std::format("category c{}", j + 1)));
-        }
+        const Emu y = down ? b.y + th / 4 : plotBottom + th / 4;
+        for (size_t j = 0; j < n; ++j)
+            d.prims.push_back(text(plot.x + static_cast<Emu>(j * slot), y, static_cast<Emu>(slot), th, categoryText(item, j), o.fontPt, Align::Center,
+                                   Color::schemeColor(L"tx1"), std::format("category c{}", j + 1)));
     }
 
-    // Datentabelle: an den Säulen ausgerichtet, "e" zeigt den berechneten Wert
-    Emu y = plotBottom + catH;
-    for (int r : tableRows) {
+    // Datentabelle unter dem Diagramm, an den Säulen ausgerichtet
+    Emu y = down ? plotBottom + labelPad : plotBottom + catH;
+    for (int r : w.tableRows) {
         const Row& row = item.table[r];
         d.prims.push_back(line(b.x, y, plot.x + plot.w, y, Color::rgbColor(0xBFBFBF), 0.5, std::format("table rule r{}", r)));
         d.prims.push_back(text(b.x, y, namesW, rowH, cellText(row.front()), o.fontPt, Align::Left, Color::schemeColor(L"tx1"),
                                std::format("table name r{}", r)));
-        for (size_t j = 0; j < n; ++j) {
-            std::wstring value;
-            if (j + 1 < row.size()) {
-                const Cell& cell = row[j + 1];
-                if (isComputedCell(cell)) {
-                    for (auto& s : columns[j].segments)
-                        if (s.row == r && s.computed) value = fmt(s.value, s.percent);
-                } else if (cell.kind == CellKind::Number || cell.kind == CellKind::Percentage) {
-                    value = fmt(cell.number, cell.kind == CellKind::Percentage);
-                } else {
-                    value = cellText(cell);
-                }
-            }
-            d.prims.push_back(text(plot.x + static_cast<Emu>(j * slot), y, static_cast<Emu>(slot), rowH, value, o.fontPt, Align::Center,
-                                   Color::schemeColor(L"tx1"), std::format("table cell r{} c{}", r, j + 1)));
-        }
+        for (size_t j = 0; j < n; ++j)
+            d.prims.push_back(text(plot.x + static_cast<Emu>(j * slot), y, static_cast<Emu>(slot), rowH, tableValue(item, w, o, r, j), o.fontPt,
+                                   Align::Center, Color::schemeColor(L"tx1"), std::format("table cell r{} c{}", r, j + 1)));
         y += rowH;
+    }
+    return d;
+}
+
+// Balken nach rechts (Right) oder links (Left): Kategorien von oben nach unten, Beschriftungen auf der Seite der
+// Basislinie; die Datentabelle steht als Spalten auf der anderen Seite, Zeilennamen als Überschrift.
+Drawing layoutWaterfallHorizontal(const DataItem& item, const ChartOptions& o, Box b) {
+    Drawing d;
+    d.bounds = b;
+    const bool left = o.orientation == Orientation::Left;
+    d.valueDirection = o.orientation;
+    WaterfallBase w = waterfallBase(item, o, d);
+    const size_t n = w.columns.size();
+
+    const Emu th = textHeight(o.fontPt);
+    Emu catW = 0;
+    if (o.categoryLabels) {
+        for (size_t j = 0; j < n; ++j) catW = std::max(catW, textWidth(categoryText(item, j), o.fontPt));
+        catW += th / 2;
+    }
+    // Tabellenspalten: so breit wie der längste Eintrag
+    std::vector<Emu> tableW;
+    Emu tableTotal = 0;
+    for (int r : w.tableRows) {
+        Emu width = textWidth(cellText(item.table[r].front()), o.fontPt);
+        for (size_t j = 0; j < n; ++j) width = std::max(width, textWidth(tableValue(item, w, o, r, j), o.fontPt));
+        tableW.push_back(width + th / 2);
+        tableTotal += tableW.back();
+    }
+    const Emu headH = w.tableRows.empty() ? 0 : th + th / 3;
+    Emu labelW = 0;  // Platz für Beschriftungen außerhalb
+    if (o.segmentLabels) {
+        for (auto& c : w.columns)
+            for (auto& s : c.segments) labelW = std::max(labelW, textWidth(formatValue(s.value, w.decimals, o.decimalSeparator, s.percent), o.fontPt));
+        labelW += th / 4;
+    }
+    const Emu growPad = labelW, shrinkPad = w.vmin < 0 ? labelW : th / 4;
+    const Emu plotW = b.w - catW - tableTotal - growPad - shrinkPad;
+    Box plot{left ? b.x + tableTotal + growPad : b.x + catW + shrinkPad, b.y + headH, plotW, b.h - headH};
+    if (plot.w <= th || plot.h <= th) throw std::invalid_argument("Platzhalter ist zu klein für Diagramm und Tabelle");
+
+    auto xOf = [&](double v) {
+        const double f = left ? (w.vmax - v) / (w.vmax - w.vmin) : (v - w.vmin) / (w.vmax - w.vmin);
+        return plot.x + static_cast<Emu>(std::llround(f * plot.w));
+    };
+    const double slot = static_cast<double>(plot.h) / n;
+    const Emu barH = static_cast<Emu>(slot / (1.0 + o.gap));
+    auto barY = [&](size_t j) { return plot.y + static_cast<Emu>(j * slot + (slot - barH) / 2.0); };
+
+    for (size_t j = 0; j < n; ++j) {
+        for (auto& s : w.columns[j].segments) {
+            const Emu x0 = xOf(s.lo), x1 = xOf(s.hi);
+            const Prim r = segmentRect(s, j, std::min(x0, x1), barY(j), std::abs(x1 - x0), barH);
+            d.prims.push_back(r);
+            if (!o.segmentLabels) continue;
+            const std::wstring label = formatValue(s.value, w.decimals, o.decimalSeparator, s.percent);
+            const std::string role = std::format("label r{} c{}", s.row, j + 1);
+            const Emu lw = textWidth(label, o.fontPt) + th / 4;
+            if (barH >= th && r.w >= lw) {
+                d.prims.push_back(text(r.x, r.y, r.w, r.h, label, o.fontPt, Align::Center, contrastOn(r.fill), role));
+            } else {
+                const bool towardsRight = (s.value >= 0) != left;
+                const Emu x = towardsRight ? r.x + r.w + th / 8 : r.x - lw;
+                d.prims.push_back(text(x, r.y + (barH - th) / 2, lw, th, label, o.fontPt, towardsRight ? Align::Left : Align::Right,
+                                       Color::schemeColor(L"tx1"), role));
+            }
+        }
+    }
+
+    if (o.connectors)
+        for (size_t j = 0; j + 1 < n; ++j) {
+            const Emu x = xOf(w.columns[j].levelAfter);
+            d.prims.push_back(line(x, barY(j) + barH, x, barY(j + 1), Color::schemeColor(L"tx1"), 0.5, std::format("connector c{}", j + 1)));
+        }
+
+    d.prims.push_back(line(xOf(0), plot.y, xOf(0), plot.y + plot.h, Color::schemeColor(L"tx1"), 0.75, "baseline"));
+
+    if (o.categoryLabels) {
+        const Emu x = left ? b.x + b.w - catW + th / 4 : b.x;
+        for (size_t j = 0; j < n; ++j)
+            d.prims.push_back(text(x, plot.y + static_cast<Emu>(j * slot), catW - th / 4, static_cast<Emu>(slot), categoryText(item, j), o.fontPt,
+                                   left ? Align::Left : Align::Right, Color::schemeColor(L"tx1"), std::format("category c{}", j + 1)));
+    }
+
+    // Datentabelle als Spalten neben dem Diagramm, an den Balken ausgerichtet
+    Emu x = left ? b.x : b.x + b.w - tableTotal;
+    for (size_t t = 0; t < w.tableRows.size(); ++t) {
+        const int r = w.tableRows[t];
+        d.prims.push_back(line(x, b.y, x, plot.y + plot.h, Color::rgbColor(0xBFBFBF), 0.5, std::format("table rule r{}", r)));
+        d.prims.push_back(text(x, b.y, tableW[t], headH, cellText(item.table[r].front()), o.fontPt, Align::Center, Color::schemeColor(L"tx1"),
+                               std::format("table name r{}", r)));
+        for (size_t j = 0; j < n; ++j)
+            d.prims.push_back(text(x, plot.y + static_cast<Emu>(j * slot), tableW[t], static_cast<Emu>(slot), tableValue(item, w, o, r, j), o.fontPt,
+                                   Align::Center, Color::schemeColor(L"tx1"), std::format("table cell r{} c{}", r, j + 1)));
+        x += tableW[t];
     }
     return d;
 }
@@ -195,7 +270,8 @@ bool samePrim(const Prim& a, const Prim& b) {
     auto sameColor = [](const Color& x, const Color& y) { return x.kind == y.kind && x.scheme == y.scheme && x.rgb == y.rgb; };
     return a.kind == b.kind && a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h && a.text == b.text && a.role == b.role &&
            a.flags == b.flags && a.value == b.value && sameColor(a.fill, b.fill) && sameColor(a.stroke, b.stroke) &&
-           sameColor(a.textColor, b.textColor) && a.fontPt == b.fontPt && a.strokePt == b.strokePt;
+           sameColor(a.textColor, b.textColor) && a.fontPt == b.fontPt && a.strokePt == b.strokePt && a.bold == b.bold && a.shape == b.shape &&
+           a.rotation == b.rotation && a.dashed == b.dashed && a.align == b.align;
 }
 
 int stepDecimals(const Cell& cell, const ChartOptions& options) {
@@ -214,11 +290,12 @@ double dragValue(double startValue, double pixels, double pixelsPerUnit, int dec
 }
 
 double emuPerUnit(const Drawing& drawing) {
+    const bool horizontal = drawing.valueDirection == Orientation::Right || drawing.valueDirection == Orientation::Left;
     double best = 0, scale = 0;
     for (auto& p : drawing.prims) {
         if (p.kind != Prim::Kind::Rect || p.flags.empty() || std::fabs(p.value) <= best) continue;
         best = std::fabs(p.value);
-        scale = static_cast<double>(p.h) / best;
+        scale = static_cast<double>(horizontal ? p.w : p.h) / best;
     }
     return scale;
 }
@@ -236,7 +313,11 @@ int chartDecimals(const DataItem& item, const ChartOptions& options) {
 
 Drawing layoutChart(const DataItem& item, const ChartOptions& options, Box bounds) {
     switch (options.type) {
-        case ChartType::Waterfall: return layoutWaterfall(item, options, bounds);
+        case ChartType::Waterfall:
+            return options.orientation == Orientation::Right || options.orientation == Orientation::Left
+                       ? layoutWaterfallHorizontal(item, options, bounds)
+                       : layoutWaterfallVertical(item, options, bounds);
+        case ChartType::Gantt: return layoutGantt(item, options, bounds);
     }
     throw std::invalid_argument("unbekannter Diagrammtyp");
 }

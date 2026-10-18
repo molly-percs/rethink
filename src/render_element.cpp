@@ -1,9 +1,11 @@
 #include "render_element.h"
 
 #include "engine/chart.h"
+#include "engine/dates.h"
 #include "fill_text.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <format>
 #include <stdexcept>
@@ -25,9 +27,33 @@ std::wstring colorXml(const Color& c) {
     return L"<a:noFill/>";
 }
 
-std::wstring xfrmXml(Emu x, Emu y, Emu w, Emu h, bool flipH = false, bool flipV = false) {
-    return std::format(L"<a:xfrm{}{}><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm>", flipH ? L" flipH=\"1\"" : L"",
-                       flipV ? L" flipV=\"1\"" : L"", x, y, w, h);
+std::wstring xfrmXml(Emu x, Emu y, Emu w, Emu h, bool flipH = false, bool flipV = false, double rotation = 0) {
+    const long rot = std::lround(rotation * 60000);
+    return std::format(L"<a:xfrm{}{}{}><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm>",
+                       rot ? std::format(L" rot=\"{}\"", rot) : L"", flipH ? L" flipH=\"1\"" : L"", flipV ? L" flipV=\"1\"" : L"", x, y, w, h);
+}
+
+const wchar_t* alignXml(Align a) { return a == Align::Left ? L"l" : a == Align::Right ? L"r" : L"ctr"; }
+
+// Absatz mit einem Lauf; Zeilenumbrüche im Text werden zu eigenen Absätzen.
+std::wstring paragraphsXml(const Prim& p) {
+    std::wstring out;
+    size_t start = 0;
+    for (;;) {
+        const size_t nl = p.text.find(L'\n', start);
+        const std::wstring part = p.text.substr(start, nl == std::wstring::npos ? std::wstring::npos : nl - start);
+        out += std::format(
+            L"<a:p><a:pPr algn=\"{}\"/><a:r><a:rPr lang=\"de-DE\" sz=\"{}\"{} dirty=\"0\">{}<a:latin typeface=\"+mn-lt\"/></a:rPr><a:t>{}</a:t></a:r></a:p>",
+            alignXml(p.align), static_cast<int>(p.fontPt * 100), p.bold ? L" b=\"1\"" : L"", colorXml(p.textColor), xmlEscapeText(part));
+        if (nl == std::wstring::npos) break;
+        start = nl + 1;
+    }
+    return out;
+}
+
+std::wstring textBodyXml(const Prim& p) {
+    return L"<p:txBody><a:bodyPr wrap=\"none\" lIns=\"0\" tIns=\"0\" rIns=\"0\" bIns=\"0\" anchor=\"ctr\"><a:noAutofit/></a:bodyPr><a:lstStyle/>" +
+           paragraphsXml(p) + L"</p:txBody>";
 }
 
 std::wstring primXml(const Prim& p, int id) {
@@ -38,6 +64,12 @@ std::wstring primXml(const Prim& p, int id) {
                 L"<p:sp><p:nvSpPr><p:cNvPr id=\"{}\" name=\"{}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>{}"
                 L"<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>{}<a:ln><a:noFill/></a:ln></p:spPr></p:sp>",
                 id, name, xfrmXml(p.x, p.y, p.w, p.h), colorXml(p.fill));
+        case Prim::Kind::Shape:
+            return std::format(
+                L"<p:sp><p:nvSpPr><p:cNvPr id=\"{}\" name=\"{}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>{}"
+                L"<a:prstGeom prst=\"{}\"><a:avLst/></a:prstGeom>{}<a:ln><a:noFill/></a:ln></p:spPr>{}</p:sp>",
+                id, name, xfrmXml(p.x, p.y, p.w, p.h, false, false, p.rotation), widen(p.shape), colorXml(p.fill),
+                p.text.empty() ? L"" : textBodyXml(p));
         case Prim::Kind::Line: {
             const bool flipH = p.w < 0, flipV = p.h < 0;
             const Emu x = flipH ? p.x + p.w : p.x, y = flipV ? p.y + p.h : p.y;
@@ -47,17 +79,11 @@ std::wstring primXml(const Prim& p, int id) {
                 id, name, xfrmXml(x, y, std::abs(p.w), std::abs(p.h), flipH, flipV), static_cast<Emu>(p.strokePt * kEmuPerPt),
                 colorXml(p.stroke), p.dashed ? L"<a:prstDash val=\"dash\"/>" : L"");
         }
-        case Prim::Kind::Text: {
-            const wchar_t* align = p.align == Align::Left ? L"l" : p.align == Align::Right ? L"r" : L"ctr";
+        case Prim::Kind::Text:
             return std::format(
                 L"<p:sp><p:nvSpPr><p:cNvPr id=\"{}\" name=\"{}\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr>{}"
-                L"<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>"
-                L"<p:txBody><a:bodyPr wrap=\"none\" lIns=\"0\" tIns=\"0\" rIns=\"0\" bIns=\"0\" anchor=\"ctr\"><a:noAutofit/></a:bodyPr>"
-                L"<a:lstStyle/><a:p><a:pPr algn=\"{}\"/><a:r><a:rPr lang=\"de-DE\" sz=\"{}\" dirty=\"0\">{}<a:latin typeface=\"+mn-lt\"/>"
-                L"</a:rPr><a:t>{}</a:t></a:r></a:p></p:txBody></p:sp>",
-                id, name, xfrmXml(p.x, p.y, p.w, p.h), align, static_cast<int>(p.fontPt * 100), colorXml(p.textColor),
-                xmlEscapeText(p.text));
-        }
+                L"<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>{}</p:sp>",
+                id, name, xfrmXml(p.x, p.y, p.w, p.h), textBodyXml(p));
     }
     return {};
 }
@@ -123,15 +149,9 @@ std::wstring storedModel(Package& pkg, const XmlDoc& slide, const std::vector<Re
     return {};
 }
 
-std::wstring localeDecimalSeparator() {
-    wchar_t buffer[8] = {};
-    if (GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_SDECIMAL, buffer, 8) > 0) return buffer;
-    return L",";
-}
-
 Drawing render(const DataItem& item, const std::wstring& chartJson, Box bounds) {
     ChartOptions options = parseChartOptions(chartJson);
-    options.decimalSeparator = localeDecimalSeparator();
+    applyLocale(options);
     try {
         return layoutChart(item, options, bounds);
     } catch (const std::invalid_argument& e) {
@@ -140,6 +160,15 @@ Drawing render(const DataItem& item, const std::wstring& chartJson, Box bounds) 
 }
 
 }  // namespace
+
+void applyLocale(ChartOptions& options) {
+    wchar_t buffer[16] = {};
+    options.decimalSeparator = GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_SDECIMAL, buffer, 16) > 0 ? buffer : L",";
+    if (GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_SISO639LANGNAME, buffer, 16) > 0) options.language = std::wstring(buffer) == L"en" ? L"en" : L"de";
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    options.gantt.referenceDay = static_cast<double>(daysFromCivil(now.wYear, now.wMonth, now.wDay));
+}
 
 int renderChartElements(Package& pkg, IOpcPart* slidePart, const XmlDoc& slide, std::vector<Relationship>& slideRels,
                         const DataItem& item, std::vector<std::string>& warnings) {

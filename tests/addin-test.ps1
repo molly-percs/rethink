@@ -1,4 +1,4 @@
-# Prüft das registrierte Add-in in PowerPoint über COM-Automation
+﻿# Prüft das registrierte Add-in in PowerPoint über COM-Automation
 # (Application.COMAddIns("rethink.addin").Object ruft dieselben Befehle auf wie das Ribbon, nur ohne Dialoge):
 #   1. Diagramm einfügen: Chart1/Chart2, natives gruppiertes Säulendiagramm, Alternativtext rethink:<Name>
 #   2. Elementname setzen: Alternativtext rethink:<Name>, Mehrfachauswahl, Entfernen, Fehler ohne Auswahl

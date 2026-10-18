@@ -1,4 +1,4 @@
-# Ende-zu-Ende-Test des Wasserfalls im Add-in (registriertes Add-in nötig: scripts\register.ps1).
+﻿# Ende-zu-Ende-Test des Wasserfalls im Add-in (registriertes Add-in nötig: scripts\register.ps1).
 # Automation über COMAddIns("rethink.addin").Object; echte Mausklicks auf das Overlay sind so nicht möglich –
 # die Griffe werden über AdjustSegment ausgelöst und ihre Lage über OverlayInfo geprüft.
 param([string]$OutDir = (Join-Path $PSScriptRoot 'out\addin-waterfall'), [switch]$KeepOpen)

@@ -2,14 +2,18 @@
 #include "cellinput.h"
 #include "datasheet.h"
 #include "engine/chart.h"
+#include "engine/dates.h"
+#include "engine/gantt_edit.h"
 
 #include <objbase.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 
 using namespace rethink;
 using namespace rethink::engine;
@@ -200,12 +204,296 @@ void testStepAndDrag() {
     check(emuPerUnit(layoutChart(single({num(0), num(0)}), o, Box{0, 0, 6000000, 4000000})) == 0, "Maßstab: nur Nullen → 0");
 }
 
+bool inside(const Drawing& d, const Box& b) {
+    for (auto& p : d.prims) {
+        const Emu x0 = std::min(p.x, p.x + p.w), x1 = std::max(p.x, p.x + p.w), y0 = std::min(p.y, p.y + p.h), y1 = std::max(p.y, p.y + p.h);
+        if (x0 < b.x - 1 || y0 < b.y - 1 || x1 > b.x + b.w + 1 || y1 > b.y + b.h + 1) {
+            std::printf("      außerhalb: %s\n", p.role.c_str());
+            return false;
+        }
+    }
+    return true;
+}
+
+const Prim* find(const Drawing& d, const std::string& role) {
+    for (auto& p : d.prims)
+        if (p.role == role) return &p;
+    return nullptr;
+}
+
+void testOrientation() {
+    DataItem item = single({num(10), num(5), num(-3), e()});
+    const Box box{0, 0, 6000000, 4000000};
+    for (Orientation o : {Orientation::Up, Orientation::Down, Orientation::Right, Orientation::Left}) {
+        ChartOptions opt;
+        opt.orientation = o;
+        opt.dataTable = true;
+        const Drawing d = layoutChart(item, opt, box);
+        const char* name = o == Orientation::Up ? "oben" : o == Orientation::Down ? "unten" : o == Orientation::Right ? "rechts" : "links";
+        check(inside(d, box), std::string("Ausrichtung ") + name + ": alle Formen im Platzhalter");
+        check(d.valueDirection == o, std::string("Ausrichtung ") + name + ": Richtung wachsender Werte vermerkt");
+        const double scale = emuPerUnit(d);
+        const bool horizontal = o == Orientation::Right || o == Orientation::Left;
+        bool consistent = scale > 0;
+        for (auto& p : d.prims)
+            if (p.kind == Prim::Kind::Rect && !p.flags.empty())
+                consistent = consistent && std::fabs((horizontal ? p.w : p.h) - std::fabs(p.value) * scale) <= 1.0;
+        check(consistent, std::string("Ausrichtung ") + name + ": Segmentlänge = |Wert| × Maßstab");
+        const Prim* first = find(d, "segment r1 c1");
+        const Prim* second = find(d, "segment r1 c2");
+        const Prim* base = find(d, "baseline");
+        if (!first || !second || !base) {
+            check(false, std::string("Ausrichtung ") + name + ": Segmente und Basislinie vorhanden");
+            continue;
+        }
+        switch (o) {
+            case Orientation::Up: check(first->y + first->h == base->y && second->x > first->x, "oben: erste Säule steht auf der Basislinie"); break;
+            case Orientation::Down: check(first->y == base->y && second->y > first->y, "unten: Säulen hängen von der Basislinie nach unten"); break;
+            case Orientation::Right: check(first->x == base->x && second->x > first->x && second->y > first->y, "rechts: Balken wachsen nach rechts, Kategorien nach unten"); break;
+            case Orientation::Left:
+                check(first->x + first->w == base->x && second->x < first->x && second->y > first->y, "links: Balken wachsen nach links");
+                break;
+        }
+    }
+}
+
+void testDates() {
+    check(daysFromCivil(1970, 1, 1) == 0 && daysFromCivil(2000, 3, 1) == 11017, "Tage seit 1970");
+    const CivilDate leap = civilFromDays(daysFromCivil(2024, 2, 29));
+    check(leap.year == 2024 && leap.month == 2 && leap.day == 29, "Schalttag hin und zurück");
+    check(isoWeekday(daysFromCivil(2026, 10, 18)) == 7 && isoWeekday(daysFromCivil(2026, 10, 19)) == 1, "Wochentag (18.10.2026 = Sonntag)");
+    check(isoWeek(daysFromCivil(2026, 1, 1)) == 1 && isoWeek(daysFromCivil(2021, 1, 3)) == 53 && isoWeek(daysFromCivil(2024, 12, 30)) == 1,
+          "ISO-Kalenderwoche an Jahresgrenzen");
+    check(parseIsoDate(L"2026-11-02") == static_cast<double>(daysFromCivil(2026, 11, 2)), "ISO-Datum");
+    check(parseIsoDate(L"20261102") == parseIsoDate(L"2026-11-02") && parseIsoDate(L"2026") == static_cast<double>(daysFromCivil(2026, 1, 1)),
+          "ISO-Datum kompakt und nur Jahr");
+    check(approx(*parseIsoDate(L"2026-11-02T12:00") - *parseIsoDate(L"2026-11-02"), 0.5) && approx(*parseIsoDate(L"20261102T18Z") - *parseIsoDate(L"2026-11-02"), 0.75),
+          "ISO-Datum mit Uhrzeit");
+    check(!parseIsoDate(L"2026-02-30") && !parseIsoDate(L"2026-13") && !parseIsoDate(L"26-01-01") && !parseIsoDate(L""), "ungültige Daten abgelehnt");
+    check(isoDate(*parseIsoDate(L"2026-11-02")) == L"2026-11-02" && isoDate(*parseIsoDate(L"2026-11-02T23:59")) == L"2026-11-02T23:59", "ISO-Ausgabe");
+
+    const double jul5 = static_cast<double>(daysFromCivil(2024, 7, 5));
+    check(formatDate(jul5, L"MMM 'yy", L"en") == L"Jul '24", "Format MMM 'yy");
+    check(formatDate(static_cast<double>(daysFromCivil(2024, 10, 1)), L"\"Quarter\" QQQ", L"en") == L"Quarter IV", "Format \"Quarter\" QQQ");
+    check(formatDate(jul5, L"ddd¶dd", L"en") == L"Fri\n05", "Format ddd¶dd (Zeilenumbruch)");
+    check(formatDate(jul5, L"www", L"de") == L"KW 27" && formatDate(jul5, L"wwww", L"en") == L"Week 27", "Format Kalenderwoche");
+    check(formatDate(jul5, L"dddd, d. MMMM yyyy", L"de") == L"Freitag, 5. Juli 2024", "Format deutsch ausgeschrieben");
+    check(formatDate(static_cast<double>(daysFromCivil(2024, 3, 1)), L"MMM QQ \\Q", L"de") == L"Mär i Q", "Format römisch klein und \\-Zeichen");
+
+    const double wed = static_cast<double>(daysFromCivil(2026, 11, 4));
+    check(unitStart(wed, TimeUnit::Week, 1) == daysFromCivil(2026, 11, 2), "Wochenanfang Montag");
+    check(unitStart(wed, TimeUnit::Week, 7) == daysFromCivil(2026, 11, 1), "Wochenanfang Sonntag");
+    check(unitStart(wed, TimeUnit::Quarter, 1) == daysFromCivil(2026, 10, 1) && nextUnit(daysFromCivil(2026, 10, 1), TimeUnit::Quarter) == daysFromCivil(2027, 1, 1),
+          "Quartal");
+    check(addUnits(static_cast<double>(daysFromCivil(2026, 1, 31)), TimeUnit::Month, 1) == static_cast<double>(daysFromCivil(2026, 2, 28)),
+          "Monat weiter: Tag wird begrenzt");
+    check(snapToUnit(wed + 0.4, TimeUnit::Day, 1) == wed && snapToUnit(wed + 0.6, TimeUnit::Day, 1) == wed + 1, "Raster Tag");
+    check(snapToUnit(wed, TimeUnit::Week, 1) == static_cast<double>(daysFromCivil(2026, 11, 2)), "Raster Woche");
+}
+
+Cell date(const wchar_t* iso) { return Cell{CellKind::Date, iso, 0, std::nullopt}; }
+
+// Zeitplan wie im Datenblatt: Überschriften, Meilensteinzeile, drei Aktivitäten
+DataItem plan() {
+    DataItem item;
+    item.name = L"Plan";
+    item.table = {
+        {str(L"Aktivität"), str(L"Start"), str(L"Ende"), str(L"Meilenstein"), str(L"Verantwortlich"), str(L"Bemerkung")},
+        {str(L"Meilensteine"), none(), none(), date(L"2027-01-15")},
+        {str(L"Analyse"), date(L"2026-11-02"), date(L"2026-11-20"), none()},
+        {str(L"Konzept"), date(L"2026-11-16"), date(L"2026-12-11"), date(L"2026-12-11")},
+        {str(L"Umsetzung"), date(L"2026-12-07"), date(L"2027-01-29"), none(), str(L"Team B")},
+    };
+    return item;
+}
+
+ChartOptions ganttOptions() {
+    ChartOptions o;
+    o.type = ChartType::Gantt;
+    o.gantt.start = L"2026-11-01";
+    o.gantt.end = L"2027-01-31";
+    return o;
+}
+
+void testGanttLayout() {
+    const Box box{0, 0, 9000000, 4000000};
+    DataItem item = plan();
+    ChartOptions o = ganttOptions();
+    const Drawing d = layoutChart(item, o, box);
+    check(inside(d, box), "Gantt: alle Formen im Platzhalter");
+    check(d.axis.valid && d.axis.t0 == static_cast<double>(daysFromCivil(2026, 11, 1)) && d.axis.t1 == static_cast<double>(daysFromCivil(2027, 2, 1)),
+          "Gantt: Bereich 01.11.2026 bis einschließlich 31.01.2027");
+    const auto scales = ganttScales(d.axis.t0, d.axis.t1, d.axis.w, o);
+    check(scales.size() == 2 && scales[0] == TimeUnit::Month && scales[1] == TimeUnit::Week, "Gantt: drei Monate auf 25 cm → Monats- und Wochenskala");
+    const Prim* month = find(d, "scale month 1");
+    check(month && month->text == L"November", "Gantt: Monatsbeschriftung „November“");
+    // Wochen sind hier zu schmal für "dd.MM.": Kalenderwochen ab Montag 02.11. (KW 45)
+    check(find(d, "scale week 2") && find(d, "scale week 2")->text == L"45", "Gantt: Wochenskala zeigt KW 45 für Montag 02.11.");
+    const Prim* bar = find(d, "bar r2");
+    check(bar && bar->flags == "bar" && std::llabs(bar->x - std::llround(d.axis.xOf(*parseIsoDate(L"2026-11-02")))) <= 1 &&
+              std::llabs(bar->x + bar->w - std::llround(d.axis.xOf(*parseIsoDate(L"2026-11-20")))) <= 1,
+          "Gantt: Balken von Start bis Ende (Ende 00:00 Uhr)");
+    check(find(d, "activity r2") && find(d, "activity r2")->text == L"Analyse", "Gantt: Aktivitätsbeschriftung");
+    check(find(d, "headline activity") && find(d, "headline activity")->bold && find(d, "headline responsible"),
+          "Gantt: Spaltenüberschriften fett; Spalte „Verantwortlich“, weil es einen Eintrag gibt");
+    check(!find(d, "headline remark"), "Gantt: leere Spalte „Bemerkung“ ist ausgeblendet");
+    check(find(d, "responsible r4") && find(d, "responsible r4")->text == L"Team B", "Gantt: Verantwortlich-Eintrag");
+    const Prim* ms = find(d, "milestone r3");
+    check(ms && ms->kind == Prim::Kind::Shape && ms->shape == "diamond" &&
+              std::llabs(ms->x + ms->w / 2 - std::llround(d.axis.xOf(*parseIsoDate(L"2026-12-11")))) <= 1,
+          "Gantt: Meilenstein am Tagesanfang (ohne Tagesskala)");
+    check(find(d, "milestone label r3") && find(d, "milestone label r3")->text == L"11.12.", "Gantt: Meilenstein mit Datum");
+    const Prim* key = find(d, "milestone r1");
+    const Prim* lastBar = find(d, "bar r4");
+    check(key && lastBar && key->y > lastBar->y + lastBar->h, "Gantt: Meilensteinzeile unter dem Diagramm");
+    check(find(d, "activity r1") && find(d, "activity r1")->text == L"Meilensteine", "Gantt: Beschriftung der Meilensteinzeile");
+    int separators = 0, dashed = 0;
+    for (auto& p : d.prims)
+        if (p.role.starts_with("separator")) ++separators, dashed += p.dashed;
+    check(separators > 0 && dashed > 0 && dashed < separators, "Gantt: Trennlinien – Monate durchgezogen, Wochen gestrichelt");
+    bool noWeekend = true;
+    for (auto& p : d.prims) noWeekend = noWeekend && !p.role.starts_with("weekend");
+    check(noWeekend, "Gantt: Wochenenden bei schmalen Tagen nicht schattiert");
+
+    // Zwei Wochen: Tagesskala, Wochenenden schattiert, Meilensteine in der Tagesmitte
+    o.gantt.start = L"2026-12-01";
+    o.gantt.end = L"2026-12-14";
+    const Drawing days = layoutChart(item, o, box);
+    check(days.axis.dayScale && find(days, "scale day 1"), "Gantt: zwei Wochen → Tagesskala");
+    bool weekend = false;
+    for (auto& p : days.prims) weekend = weekend || p.role.starts_with("weekend");
+    check(weekend, "Gantt: Wochenenden schattiert");
+    const Prim* mid = find(days, "milestone r3");
+    check(mid && std::llabs(mid->x + mid->w / 2 - std::llround(days.axis.xOf(*parseIsoDate(L"2026-12-11") + 0.5))) <= 1,
+          "Gantt: Meilenstein in der Tagesmitte (Tagesskala sichtbar)");
+    const Prim* clipped = find(days, "bar r3");
+    check(clipped && clipped->x == days.axis.x0 && find(days, "bar r3 from") && !find(days, "bar r3 to"),
+          "Gantt: Balken beginnt vor dem Bereich → Pfeil am Anfang, keiner am Ende");
+    check(find(days, "bar r4") && find(days, "bar r4 to"), "Gantt: Balken über das Bereichsende hinaus bekommt einen Pfeil");
+    check(find(days, "bar r2") == nullptr, "Gantt: Balken außerhalb des Bereichs ist ausgeblendet");
+
+    // Ausgeblendete Wochenenden: Samstag und Sonntag haben keine Breite
+    o.gantt.weekends = WeekendMode::Hidden;
+    const GanttAxis hidden = ganttAxis(item, o, box);
+    const double sat = *parseIsoDate(L"2026-12-05"), mon = *parseIsoDate(L"2026-12-07");
+    check(std::fabs(hidden.xOf(sat) - hidden.xOf(mon)) < 1 && hidden.xOf(sat) > hidden.xOf(sat - 1), "Gantt: ausgeblendete Wochenenden ohne Breite");
+    check(std::fabs(hidden.dateAt(hidden.xOf(*parseIsoDate(L"2026-12-03T06:00"))) - *parseIsoDate(L"2026-12-03T06:00")) < 1e-3,
+          "Gantt: Achse umkehrbar (dateAt ∘ xOf)");
+
+    // Ohne Bereich: an die Daten angepasst (ganze Monate); ohne Daten: Referenzmonat + zwei
+    ChartOptions fit;
+    fit.type = ChartType::Gantt;
+    const auto range = ganttRange(item, fit);
+    check(range.first == static_cast<double>(daysFromCivil(2026, 11, 1)) && range.second == static_cast<double>(daysFromCivil(2027, 2, 1)),
+          "Gantt: Vorgabebereich = Daten auf Monate erweitert");
+    DataItem empty;
+    empty.table = {{str(L"Aktivität")}};
+    fit.gantt.referenceDay = static_cast<double>(daysFromCivil(2026, 10, 18));
+    const auto fresh = ganttRange(empty, fit);
+    check(fresh.first == static_cast<double>(daysFromCivil(2026, 10, 1)) && fresh.second == static_cast<double>(daysFromCivil(2027, 1, 1)),
+          "Gantt: neues Diagramm zeigt den aktuellen und die zwei folgenden Monate");
+
+    // Frei gesetzte Elemente
+    ChartOptions items = ganttOptions();
+    items.gantt.items = {
+        {GanttItem::Kind::Chevron, 2, L"2026-11-23", L"2026-12-04", L"Phase 2", std::nullopt},
+        {GanttItem::Kind::Shade, 0, L"2026-12-24", L"2027-01-02", L"", std::nullopt},
+        {GanttItem::Kind::Bracket, 4, L"2027-01-04", L"2027-01-16", L"Test", std::nullopt},
+        {GanttItem::Kind::Milestone, 1, L"2026-12-18", L"", L"", 0xC00000},
+    };
+    const Drawing withItems = layoutChart(item, items, box);
+    const Prim* chevron = find(withItems, "item 0");
+    check(chevron && chevron->shape == "chevron" && chevron->text == L"Phase 2", "Gantt: Chevron mit Text");
+    const Prim* shade = find(withItems, "item 1");
+    check(shade && shade->flags == "shade" && shade == &withItems.prims.front(), "Gantt: Schattierung liegt ganz hinten");
+    check(find(withItems, "item 1 label") && find(withItems, "item 1 label")->text == L"24.12.–01.01.", "Gantt: Schattierung mit Datumsbereich");
+    check(find(withItems, "item 2") && find(withItems, "item 2 label")->text == L"Test", "Gantt: Klammer mit Text");
+    const Prim* red = find(withItems, "item 3");
+    check(red && red->fill.kind == Color::Kind::Rgb && red->fill.rgb == 0xC00000, "Gantt: Meilenstein mit eigener Farbe");
+    check(inside(withItems, box), "Gantt mit Elementen: alle Formen im Platzhalter");
+
+    // Datumsbeschriftung an Balken: letzter eingeschlossener Tag
+    ChartOptions labels = ganttOptions();
+    labels.gantt.barLabels = BarLabel::Range;
+    const Drawing labelled = layoutChart(item, labels, box);
+    check(find(labelled, "bar r2 label") && find(labelled, "bar r2 label")->text == L"02.11.–19.11.", "Gantt: Balkenbeschriftung bis zum letzten Tag");
+
+    bool tooSmall = false;
+    try {
+        layoutChart(item, o, Box{0, 0, 9000000, 600000});
+    } catch (const std::invalid_argument&) {
+        tooSmall = true;
+    }
+    check(tooSmall, "Gantt: zu niedriger Platzhalter wird gemeldet");
+}
+
+void testGanttEdit() {
+    const Box box{0, 0, 9000000, 4000000};
+    DataItem item = plan();
+    ChartOptions o = ganttOptions();
+    const GanttAxis axis = ganttAxis(item, o, box);
+    const double perDay = axis.emuPerDay();
+
+    GanttTarget bar = ganttTarget(item, o, "bar r2");
+    check(bar.kind == GanttTarget::Kind::Bar && bar.row == 2 && bar.start == *parseIsoDate(L"2026-11-02"), "Ziel: Balken aus dem Datenblatt");
+    auto [s, e] = ganttDragDates(axis, bar, GanttGrip::End, perDay * 3.4, TimeUnit::Day);
+    check(s == bar.start && e == *parseIsoDate(L"2026-11-23"), "Ende ziehen: +3 Tage (gerastet)");
+    std::tie(s, e) = ganttDragDates(axis, bar, GanttGrip::Move, -perDay * 2.2, TimeUnit::Day);
+    check(s == *parseIsoDate(L"2026-10-31") && e - s == bar.end - bar.start, "Verschieben: −2 Tage, Dauer bleibt");
+    std::tie(s, e) = ganttDragDates(axis, bar, GanttGrip::Start, perDay * 40, TimeUnit::Day);
+    check(s == bar.end - 1 && e == bar.end, "Start über das Ende hinaus: bleibt einen Tag davor");
+    std::tie(s, e) = ganttDragDates(axis, bar, GanttGrip::Start, perDay * 4, TimeUnit::Week);
+    check(s == *parseIsoDate(L"2026-11-09"), "Start ziehen mit Wochenraster: nächster Montag");
+    setGanttDates(item, o, bar, *parseIsoDate(L"2026-11-03"), *parseIsoDate(L"2026-11-24"));
+    check(item.table[2][1].kind == CellKind::Date && item.table[2][1].text == L"2026-11-03" && item.table[2][2].text == L"2026-11-24",
+          "Neue Daten stehen im Datenblatt");
+
+    const GanttTarget ms = ganttTarget(item, o, "milestone r3");
+    std::tie(s, e) = ganttDragDates(axis, ms, GanttGrip::Move, perDay * 5.2, TimeUnit::Day);
+    check(ms.kind == GanttTarget::Kind::Milestone && s == *parseIsoDate(L"2026-12-16"), "Meilenstein ziehen: +5 Tage");
+    check(ganttTarget(item, o, "bar r9").kind == GanttTarget::Kind::None && ganttTarget(item, o, "bar r2 label").kind == GanttTarget::Kind::None,
+          "Ziel: unbekannte Rollen");
+
+    const auto [t0, t1] = ganttRangeDrag(axis, true, -perDay * 12, TimeUnit::Week);
+    check(t0 == *parseIsoDate(L"2026-10-19") && t1 == axis.t1, "Skala links ziehen: Wochenraster");
+    const auto [u0, u1] = ganttRangeDrag(axis, false, -perDay * 200, TimeUnit::Month);
+    check(u0 == axis.t0 && u1 == *parseIsoDate(L"2026-12-01"), "Skala rechts zu weit: mindestens eine Einheit bleibt");
+    check(ganttTooltip(*parseIsoDate(L"2026-11-04"), L"de") == L"Mi 04.11.2026 · KW 45", "Kurzinfo beim Ziehen");
+
+    ChartOptions fit = o;
+    check(fitGanttRange(item, fit) && fit.gantt.start == L"2026-11-03" && fit.gantt.end == L"2027-01-28", "Skala an Daten anpassen");
+
+    // Zeilen und Elemente
+    o.gantt.items = {{GanttItem::Kind::Bar, 3, L"2026-12-14", L"2026-12-18", L"", std::nullopt}};
+    const int added = insertGanttRow(item, o, 3, L"Neu");
+    check(added == 3 && item.table[3][0].text == L"Neu" && item.table[4][0].text == L"Konzept" && o.gantt.items[0].row == 4,
+          "Zeile einfügen: Elemente darunter wandern mit");
+    check(moveGanttRow(item, o, 4, -1) && item.table[3][0].text == L"Konzept" && o.gantt.items[0].row == 3, "Zeile nach oben: Element folgt");
+    check(!moveGanttRow(item, o, 2, -1), "Zeile über die erste Aktivität hinaus: nicht möglich");
+    duplicateGanttRow(item, o, 3, false);
+    check(item.table[4][0].text == L"Konzept" && o.gantt.items.size() == 2 && o.gantt.items[1].row == 4, "Zeile duplizieren mit Elementen");
+    deleteGanttRow(item, o, 4);
+    check(item.table[4][0].text == L"Neu" && o.gantt.items.size() == 1, "Zeile löschen entfernt ihre Elemente");
+
+    addGanttItem(item, o, GanttItem::Kind::Bar, 4, *parseIsoDate(L"2026-12-01T15:00"), 7);
+    check(item.table[4].size() > 2 && item.table[4][1].text == L"2026-12-01" && item.table[4][2].text == L"2026-12-08", "Neuer Balken in leerer Zeile → Datenblatt");
+    addGanttItem(item, o, GanttItem::Kind::Bar, 4, *parseIsoDate(L"2026-12-20"), 7);
+    check(o.gantt.items.size() == 2 && o.gantt.items[1].row == 4 && o.gantt.items[1].start == L"2026-12-20", "Zweiter Balken in der Zeile → freies Element");
+    deleteGanttTarget(item, o, ganttTarget(item, o, "item 1"));
+    deleteGanttTarget(item, o, ganttTarget(item, o, "bar r4"));
+    check(o.gantt.items.size() == 1 && item.table[4][1].kind == CellKind::Empty, "Elemente löschen");
+}
+
 }  // namespace
 
 int main() {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     testCellInput();
     testStepAndDrag();
+    testOrientation();
+    testDates();
+    testGanttLayout();
+    testGanttEdit();
     testDatasheetRoundtrip();
     testEAtEnd();
     testEMid();

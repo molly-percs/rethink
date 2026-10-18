@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace rethink::engine {
@@ -43,7 +44,8 @@ struct Color {
 enum class Align { Left, Center, Right };
 
 struct Prim {
-    enum class Kind { Rect, Line, Text } kind = Kind::Rect;
+    // Shape: vordefinierte Form `shape` (OOXML-Name: "diamond", "triangle", "homePlate", "chevron"), optional mit Text
+    enum class Kind { Rect, Line, Text, Shape } kind = Kind::Rect;
     Emu x = 0, y = 0, w = 0, h = 0;  // Linie: von (x, y) nach (x + w, y + h)
     Color fill, stroke, textColor;
     double strokePt = 0.75;
@@ -51,18 +53,49 @@ struct Prim {
     std::wstring text;
     double fontPt = 12;
     Align align = Align::Center;
+    bool bold = false;
+    std::string shape;    // nur Kind::Shape
+    double rotation = 0;  // Grad im Uhrzeigersinn (Kind::Shape)
     std::string role;   // eindeutiger Rollenname, z. B. "segment r1 c3"; Formname im Element
-    std::string flags;  // Segmente: "pos", "neg" oder "e" (berechnet) – für Griffe im Add-in
+    std::string flags;  // Segmente: "pos", "neg" oder "e" (berechnet); Gantt: "bar", "milestone" … – für Griffe im Add-in
     double value = 0;   // Segmente: dargestellter Wert (für den Maßstab beim Ziehen)
 };
 
 // Gleich gezeichnet? (Geometrie, Text, Farben, Kennung) – für Aktualisierungen nur geänderter Formen.
 bool samePrim(const Prim& a, const Prim& b);
 
+// Zeitachse eines Zeitplans: sichtbarer Bereich [t0, t1) in Tagen auf die Breite [x0, x0 + w] in EMU.
+// Ausgeblendete Wochenenden haben keine Breite.
+struct GanttAxis {
+    bool valid = false;
+    double t0 = 0, t1 = 1;
+    Emu x0 = 0, w = 1;
+    bool hideWeekends = false;
+    int weekendFirst = 6, weekendLast = 7, weekStart = 1;
+    TimeUnit finest = TimeUnit::Day;  // feinste gezeigte Skala
+    bool dayScale = false;            // Tagesskala sichtbar: Meilensteine in der Tagesmitte
+
+    double xOf(double t) const;       // EMU (nicht gerundet), außerhalb des Bereichs linear fortgesetzt
+    double dateAt(double x) const;    // Umkehrung von xOf
+    double emuPerDay() const;
+    // Kleinste sinnvolle Rasterung beim Ziehen: Tag, sonst Woche oder Monat, wenn ein Tag schmaler als minEmu ist.
+    TimeUnit snapUnit(double minEmu) const;
+};
+
+// Zeitplan: senkrechte Lage einer Zeile ("table"-Index; 1 = Meilensteinzeile) – für Mausposition → Zeile im Add-in.
+struct RowBand {
+    int row = 0;
+    Emu y = 0, h = 0;
+};
+
 struct Drawing {
     Box bounds;
     std::vector<Prim> prims;
     std::vector<std::string> warnings;
+    Orientation valueDirection = Orientation::Up;  // Säulendiagramme: Richtung wachsender Werte (für ▲▼-Griffe)
+    GanttAxis axis;                                // Zeitplan: Zeitachse (für Ziehen in Tagen)
+    std::vector<RowBand> rows;                     // Zeitplan: Zeilen
+    Emu scaleTop = 0, scaleBottom = 0;             // Zeitplan: Band der Kalenderskalen
 };
 
 // ---- Wasserfall ----------------------------------------------------------
@@ -114,5 +147,33 @@ std::wstring formatValue(double value, int decimals, const std::wstring& decimal
 
 // Ist die Zelle ein "e" (berechnetes Segment)?
 bool isComputedCell(const Cell& cell);
+
+// ---- Zeitplan (Gantt) ----
+//
+// Datenblatt wie im Original: Zeile 0 = Spaltenüberschriften (Aktivität, Start, Ende, Meilenstein, Verantwortlich,
+// Bemerkung – die Überschriften der Beschriftungsspalten erscheinen im Diagramm), Zeile 1 = Meilensteinzeile unter dem
+// Diagramm, ab Zeile 2 je Zeile eine Aktivität. Spalten: 0 Aktivität, 1 Start, 2 Ende, 3 Meilenstein, 4 Verantwortlich,
+// 5 Bemerkung. Ein Datum ohne Uhrzeit ist 00:00 Uhr – ein Balken, der am 20. endet, schließt den 20. nicht ein.
+
+namespace gantt {
+inline constexpr int kHeaderRow = 0, kMilestoneRow = 1, kFirstActivityRow = 2;
+inline constexpr int kLabelCol = 0, kStartCol = 1, kEndCol = 2, kMilestoneCol = 3, kResponsibleCol = 4, kRemarkCol = 5;
+}  // namespace gantt
+
+// Datum einer Zelle (Datum oder ISO-Text), sonst nullopt.
+std::optional<double> cellDate(const Cell& cell);
+
+// Frühester Anfang und spätestes Ende aller Balken, Meilensteine, Klammern und Schattierungen (Tage), sonst nullopt.
+std::optional<std::pair<double, double>> ganttDataRange(const DataItem& item, const ChartOptions& options);
+
+// Sichtbarer Bereich [t0, t1): "start"/"end" der Optionen, sonst die Daten auf ganze Monate erweitert,
+// ohne Daten der Monat von options.gantt.referenceDay und die zwei folgenden.
+std::pair<double, double> ganttRange(const DataItem& item, const ChartOptions& options);
+
+// Zeitachse, wie layoutGantt sie für diesen Rahmen verwendet (für das Ziehen im Add-in).
+GanttAxis ganttAxis(const DataItem& item, const ChartOptions& options, Box bounds);
+
+// Gezeigte Skalen (grob → fein): die Optionen oder automatisch nach Breite je Einheit und Schriftgröße.
+std::vector<TimeUnit> ganttScales(double t0, double t1, Emu plotWidth, const ChartOptions& options);
 
 }  // namespace rethink::engine

@@ -58,4 +58,8 @@ namespace rethink {
 // "chart"-Objekt in Optionen übersetzen; unbekannte Typen führen zu einem Fehler.
 engine::ChartOptions parseChartOptions(const std::wstring& json);
 
+// Die im Add-in änderbaren Zeitplan-Schlüssel (Bereich, Skalen, Anzeige, Elemente) als JSON-Objekt –
+// mit mergeChartJson über das gespeicherte "chart" gelegt.
+std::wstring ganttEditsJson(const engine::GanttOptions& gantt);
+
 }  // namespace rethink

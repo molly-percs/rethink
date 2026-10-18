@@ -24,6 +24,9 @@ add_library(rethink_core STATIC
     # Layout-Kern für gezeichnete Diagramme (ohne COM/XML), siehe docs/charting-ledger.md
     src/engine/waterfall.cpp
     src/engine/layout.cpp
+    src/engine/dates.cpp
+    src/engine/gantt.cpp
+    src/engine/gantt_edit.cpp
 )
 target_include_directories(rethink_core PUBLIC src)
 target_compile_definitions(rethink_core PUBLIC ${RETHINK_DEFINES})
