@@ -21,7 +21,7 @@ constexpr COLORREF kGrid = RGB(225, 225, 225), kHeader = RGB(243, 243, 243), kHe
 constexpr COLORREF kHeaderActive = RGB(210, 210, 210), kAccent = RGB(33, 115, 70), kSelection = RGB(232, 242, 236);
 constexpr COLORREF kHint = RGB(120, 120, 120);
 enum Command : UINT {
-    kInsertRow = 100, kDeleteRow, kInsertColumn, kDeleteColumn, kTogglePercent, kFill, kClearFill, kExcel, kUndo, kCopy, kPaste
+    kInsertRow = 100, kDeleteRow, kInsertColumn, kDeleteColumn, kTogglePercent, kFill, kClearFill, kExcel, kUndo, kCopy, kPaste, kSortCategories
 };
 
 }  // namespace
@@ -505,6 +505,10 @@ private:
             case kExcel:
                 if (cb_.openInExcel) cb_.openInExcel();
                 break;
+            case kSortCategories:
+                commitEdit();
+                if (cb_.sortCategories) cb_.sortCategories();  // sortiert über das Diagramm und setzt die Tabelle neu
+                break;
         }
     }
     void contextMenu(int x, int y) {
@@ -521,6 +525,10 @@ private:
         AppendMenuW(menu, MF_STRING, kTogglePercent, L"Prozent ein/aus");
         AppendMenuW(menu, MF_STRING, kFill, L"Zellfarbe …");
         AppendMenuW(menu, MF_STRING, kClearFill, L"Zellfarbe entfernen");
+        if (cb_.sortCategories) {
+            AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(menu, MF_STRING, kSortCategories, L"Nach Kategorie sortieren …");
+        }
         if (cb_.openInExcel) {
             AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
             AppendMenuW(menu, MF_STRING, kExcel, L"In Excel bearbeiten");

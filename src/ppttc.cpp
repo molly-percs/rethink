@@ -206,11 +206,18 @@ constexpr int kWeekendDays[][2] = {{6, 7}, {5, 6}, {4, 5}, {5, 5}, {7, 7}};
 constexpr const wchar_t* kWeekdays[] = {L"monday", L"tuesday", L"wednesday", L"thursday", L"friday", L"saturday", L"sunday"};
 constexpr const wchar_t* kBarLabels[] = {L"none", L"range", L"start", L"end"};
 constexpr const wchar_t* kItemKinds[] = {L"bar", L"pentagon", L"chevron", L"milestone", L"bracket", L"shade"};
+constexpr const wchar_t* kDesigns[] = {L"standard", L"modern", L"contrast", L"minimal"};
+constexpr const wchar_t* kCategoryStyles[] = {L"bracket", L"block", L"text"};
+constexpr const wchar_t* kBarShapes[] = {L"bar", L"rounded", L"pentagon", L"chevron"};
+constexpr const wchar_t* kMarkers[] = {L"diamond", L"triangle", L"circle", L"square", L"star"};
 
 void checkDate(const std::wstring& value, const std::string& where, const char* key) {
     if (!value.empty() && !std::regex_match(value, kDate))
         fail(where, std::format("\"{}\" muss ein ISO-8601-Datum sein, z. B. \"2026-11-02\"", key));
 }
+
+// Schlüssel vorhanden und nicht null (null = Vorgabe des Designs)
+bool present(const JsonObject& o, const wchar_t* key) { return o.HasKey(key) && o.GetNamedValue(key).ValueType() != JsonValueType::Null; }
 
 void parseGantt(const JsonObject& o, engine::GanttOptions& g) {
     g.start = optionalString(o, L"start", g.start);
@@ -237,7 +244,18 @@ void parseGantt(const JsonObject& o, engine::GanttOptions& g) {
         g.weekendFirst = kWeekendDays[w][0], g.weekendLast = kWeekendDays[w][1];
     }
     g.weekStart = optionalChoice(o, L"weekStart", kWeekdays, g.weekStart - 1) + 1;
-    g.separators = optionalBool(o, L"separators", g.separators);
+    g.design = static_cast<engine::GanttDesign>(optionalChoice(o, L"design", kDesigns, static_cast<int>(g.design)));
+    if (present(o, L"separators")) g.separators = optionalBool(o, L"separators", true);
+    if (present(o, L"barHeight")) {
+        g.barHeight = optionalNumber(o, L"barHeight", 0.55);
+        if (*g.barHeight < 0.15 || *g.barHeight > 0.95) fail("chart", "\"barHeight\" muss zwischen 0.15 und 0.95 liegen (Anteil der Zeilenhöhe)");
+    }
+    if (present(o, L"barShape")) g.barShape = kBarShapes[optionalChoice(o, L"barShape", kBarShapes, 0)];
+    if (present(o, L"milestoneShape")) g.milestoneShape = kMarkers[optionalChoice(o, L"milestoneShape", kMarkers, 0)];
+    if (present(o, L"category")) g.category = optionalBool(o, L"category", false);
+    if (present(o, L"categoryStyle")) g.categoryStyle = static_cast<engine::CategoryStyle>(optionalChoice(o, L"categoryStyle", kCategoryStyles, 0));
+    if (present(o, L"categoryColors")) g.categoryColors = optionalBool(o, L"categoryColors", false);
+    g.links = optionalBool(o, L"links", g.links);
     g.barLabels = static_cast<engine::BarLabel>(optionalChoice(o, L"barLabels", kBarLabels, static_cast<int>(g.barLabels)));
     g.milestoneLabels = optionalBool(o, L"milestoneLabels", g.milestoneLabels);
     g.milestoneLines = optionalBool(o, L"milestoneLines", g.milestoneLines);
@@ -255,7 +273,7 @@ void parseGantt(const JsonObject& o, engine::GanttOptions& g) {
     if (o.HasKey(L"responsible")) g.responsible = optionalBool(o, L"responsible", false);
     if (o.HasKey(L"remark")) g.remark = optionalBool(o, L"remark", false);
     g.headlines = optionalBool(o, L"headlines", g.headlines);
-    g.rowSeparators = optionalBool(o, L"rowSeparators", g.rowSeparators);
+    if (present(o, L"rowSeparators")) g.rowSeparators = optionalBool(o, L"rowSeparators", false);
     g.shadedRows = intList(o, L"shadedRows");
     if (o.HasKey(L"today")) {
         auto v = o.GetNamedValue(L"today");
@@ -374,14 +392,33 @@ std::wstring ganttEditsJson(const engine::GanttOptions& g) {
     for (size_t i = 0; i < std::size(kWeekends); ++i)
         if (kWeekendDays[i][0] == g.weekendFirst && kWeekendDays[i][1] == g.weekendLast) o.SetNamedValue(L"weekend", JsonValue::CreateStringValue(kWeekends[i]));
     o.SetNamedValue(L"weekStart", JsonValue::CreateStringValue(kWeekdays[std::clamp(g.weekStart, 1, 7) - 1]));
-    o.SetNamedValue(L"separators", JsonValue::CreateBooleanValue(g.separators));
+    o.SetNamedValue(L"design", JsonValue::CreateStringValue(kDesigns[static_cast<int>(g.design)]));
+    // Optionale Schlüssel: ohne Angabe gilt die Vorgabe des Designs; null löscht eine frühere Angabe beim Zusammenführen
+    auto optionalBoolValue = [](const std::optional<bool>& v) { return v ? JsonValue::CreateBooleanValue(*v) : JsonValue::CreateNullValue(); };
+    o.SetNamedValue(L"separators", optionalBoolValue(g.separators));
+    o.SetNamedValue(L"rowSeparators", optionalBoolValue(g.rowSeparators));
+    o.SetNamedValue(L"category", optionalBoolValue(g.category));
+    o.SetNamedValue(L"categoryColors", optionalBoolValue(g.categoryColors));
+    o.SetNamedValue(L"barHeight", g.barHeight ? JsonValue::CreateNumberValue(*g.barHeight) : JsonValue::CreateNullValue());
+    o.SetNamedValue(L"barShape", g.barShape.empty() ? JsonValue::CreateNullValue() : JsonValue::CreateStringValue(g.barShape));
+    o.SetNamedValue(L"milestoneShape", g.milestoneShape.empty() ? JsonValue::CreateNullValue() : JsonValue::CreateStringValue(g.milestoneShape));
+    o.SetNamedValue(L"categoryStyle",
+                    g.categoryStyle ? JsonValue::CreateStringValue(kCategoryStyles[static_cast<int>(*g.categoryStyle)]) : JsonValue::CreateNullValue());
+    o.SetNamedValue(L"links", JsonValue::CreateBooleanValue(g.links));
+    o.SetNamedValue(L"dateFormat", JsonValue::CreateStringValue(g.dateFormat));
+    JsonObject formats;
+    formats.SetNamedValue(L"day", JsonValue::CreateStringValue(g.dayFormat));
+    formats.SetNamedValue(L"week", JsonValue::CreateStringValue(g.weekFormat));
+    formats.SetNamedValue(L"month", JsonValue::CreateStringValue(g.monthFormat));
+    formats.SetNamedValue(L"quarter", JsonValue::CreateStringValue(g.quarterFormat));
+    formats.SetNamedValue(L"year", JsonValue::CreateStringValue(g.yearFormat));
+    o.SetNamedValue(L"formats", formats);
     o.SetNamedValue(L"barLabels", JsonValue::CreateStringValue(kBarLabels[static_cast<int>(g.barLabels)]));
     o.SetNamedValue(L"milestoneLabels", JsonValue::CreateBooleanValue(g.milestoneLabels));
     o.SetNamedValue(L"milestoneLines", JsonValue::CreateBooleanValue(g.milestoneLines));
     if (g.responsible) o.SetNamedValue(L"responsible", JsonValue::CreateBooleanValue(*g.responsible));
     if (g.remark) o.SetNamedValue(L"remark", JsonValue::CreateBooleanValue(*g.remark));
     o.SetNamedValue(L"headlines", JsonValue::CreateBooleanValue(g.headlines));
-    o.SetNamedValue(L"rowSeparators", JsonValue::CreateBooleanValue(g.rowSeparators));
     if (!g.today.empty() && g.todayLine) o.SetNamedValue(L"today", JsonValue::CreateStringValue(g.today));
     else o.SetNamedValue(L"today", JsonValue::CreateBooleanValue(g.todayLine));
     JsonArray shaded;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/options.h"
+#include "ppttc.h"
 #include "util.h"
 
 #include <string>
@@ -113,12 +114,38 @@ struct GanttHit {
 };
 GanttHit ganttHitAt(IDispatch* element, double x, double y);
 
-// Befehle aus dem Kontextmenü (Steuerelement-ID des Ribbons, z. B. "rtkG_insertRow") am ausgewählten Zeitplan;
-// hit: Mausposition beim Öffnen des Menüs.
-void ganttCommand(IDispatch* app, const std::wstring& id, const GanttHit& hit);
-// Umschalter im Kontextmenü (z. B. "rtkT_separators"): Zustand lesen bzw. setzen.
+// Befehle am ausgewählten Zeitplan; hit: Mausposition beim Öffnen des Menüs. Ein Befehl ist "schlüssel=wert" oder ein
+// Aktionsname, z. B. "design=modern", "barHeight=0.75", "weekends=shaded", "separators=0", "rowSeparators=1",
+// "scale:day=1", "scales=auto", "format:month=MMM", "dateFormat=dd.MM.yy", "barLabels=range", "column:category=1",
+// "categoryStyle=block", "categoryColors=1", "links=1", "link=Analyse" (Vorgänger der Zeile umschalten), "rowShape=chevron",
+// "rowMarker=star", "barShape=rounded", "milestoneShape=circle", "rowShade=1", "insertRow", "duplicateRow", "deleteRow",
+// "rowUp", "rowDown", "new=bar|milestone|bracket|shade|pentagon|chevron", "deleteItem", "fit", "calendar", "datasheet",
+// "sortCategories" (Dialog) bzw. "sortCategories=Bau|Planung". Die IDs des PowerPoint-Kontextmenüs (rtkG_…) gehen auch.
+void ganttCommand(IDispatch* app, const std::wstring& command, const GanttHit& hit);
+// Umschalter des PowerPoint-Kontextmenüs (z. B. "rtkT_separators"): Zustand lesen bzw. setzen.
 bool ganttPressed(IDispatch* app, const std::wstring& id, const GanttHit& hit);
 void ganttToggle(IDispatch* app, const std::wstring& id, bool pressed, const GanttHit& hit);
+
+// Zustand des ausgewählten Zeitplans für das eigene Kontextmenü (Häkchen, Auswahllisten).
+struct GanttState {
+    engine::GanttOptions options;          // gespeicherte Optionen
+    std::vector<engine::TimeUnit> scales;  // gezeigte Skalen, grob → fein
+    double barHeight = 0.55;               // wirksam (Optionen oder Design)
+    std::wstring barShape, marker;
+    engine::CategoryStyle categoryStyle = engine::CategoryStyle::Bracket;
+    bool categoryColors = false, separators = true, rowSeparators = false;
+    bool categoryShown = false, responsibleShown = false, remarkShown = false;
+    std::vector<std::wstring> activities;  // Beschriftung je Aktivitätszeile (Zeile 2 = Index 0)
+    std::vector<std::wstring> categories;
+    std::string targetKind;                // Form unter der Maus: "bar", "milestone", "bracket", "shade" oder leer
+    bool targetIsItem = false;             // frei gesetztes Element (sonst Datenblatt)
+    std::wstring rowShape, rowMarker;      // Spalten 8/9 der Zeile unter der Maus (kanonisch, leer = Vorgabe)
+    std::vector<std::wstring> rowLinks;    // Vorgänger der Zeile
+    bool rowShaded = false;
+    double today = 0;
+    std::wstring language;
+};
+GanttState ganttState(IDispatch* app, const GanttHit& hit);
 
 // Kalender (Doppelklick auf Skala oder Element, Kontextmenü): role leer = sichtbarer Bereich.
 void openGanttCalendar(IDispatch* app, const std::string& role);

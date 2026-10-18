@@ -61,43 +61,45 @@ try {
     $plotW = $group.GroupItems.Item('scale end').Left - $group.GroupItems.Item('scale start').Left
     $days = ((D (($t['range'] -split '\.\.')[1])) - (D (($t['range'] -split '\.\.')[0]))).TotalDays + 1
     $ptPerDay = $plotW / $days
+    function Px([double]$d) { [int][math]::Round($d * $ptPerDay / $ptPerPx) }  # Mausweg für d Tage bei der aktuellen Zoomstufe
+    function Steps([double[]]$ds) { ($ds | ForEach-Object { Px $_ }) -join ';' }
 
     # 3. Ende ziehen: an Ort und Stelle, gerastet, Anfang bleibt
     $s0 = StartOf $t 'bar r2'; $e0 = EndOf $t 'bar r2'
     $ids = Ids $group
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $tips = $api.GanttDrag('bar r2', 1, '10;30;60', $false)
+    $tips = $api.GanttDrag('bar r2', 1, (Steps 1, 3, 5.3), $false)
     $sw.Stop()
     $t = Targets $api
     $delta = ((EndOf $t 'bar r2') - $e0).TotalDays
-    $expected = 60 * $ptPerPx / $ptPerDay
-    Expect ((StartOf $t 'bar r2') -eq $s0 -and $delta -gt 0 -and [math]::Abs($delta - $expected) -le 7) ("Ende ziehen um 60 px: +{0} Tage (erwartet ~{1:N1}, {2} ms)" -f $delta, $expected, $sw.ElapsedMilliseconds)
+    $expected = (Px 5.3) * $ptPerPx / $ptPerDay
+    Expect ((StartOf $t 'bar r2') -eq $s0 -and $delta -gt 0 -and [math]::Abs($delta - $expected) -le 7) ("Ende ziehen um gut 5 Tage: +{0} Tage (erwartet ~{1:N1}, {2} ms)" -f $delta, $expected, $sw.ElapsedMilliseconds)
     Expect ($tips -match 'KW') "Kurzinfo beim Ziehen ($(($tips -split ' \| ')[-1]))"
     Expect ((Ids $slide.Shapes.Item($name)) -eq $ids) '… an Ort und Stelle (dieselben Formen)'
     Expect ($slide.Shapes.Item($name).Tags.Item('RETHINK_MODEL') -match ('"date":"{0:yyyy-MM-dd}"' -f (EndOf $t 'bar r2'))) '… Modell am Element gespeichert'
 
     # 4. Verschieben erhält die Dauer
     $s1 = StartOf $t 'bar r2'; $e1 = EndOf $t 'bar r2'
-    [void]$api.GanttDrag('bar r2', 2, '-20;-45', $false)
+    [void]$api.GanttDrag('bar r2', 2, (Steps -1, -1.7), $false)
     $t = Targets $api
     Expect ((StartOf $t 'bar r2') -lt $s1 -and ((EndOf $t 'bar r2') - (StartOf $t 'bar r2')) -eq ($e1 - $s1)) ('Verschieben: {0:dd.MM.} → {1:dd.MM.}, Dauer bleibt' -f $s1, (StartOf $t 'bar r2'))
 
     # 5. Esc bricht ab
     $before = $t['bar r2']
-    [void]$api.GanttDrag('bar r2', 2, '40;80', $true)
+    [void]$api.GanttDrag('bar r2', 2, (Steps 3, 6), $true)
     $t = Targets $api
     Expect ($t['bar r2'] -eq $before) 'Esc beim Ziehen: Daten unverändert'
 
     # 6. Meilenstein ziehen
     $m0 = D $t['milestone r3']
-    [void]$api.GanttDrag('milestone r3', 2, '30;50', $false)
+    [void]$api.GanttDrag('milestone r3', 2, (Steps 2, 3.2), $false)
     $t = Targets $api
     Expect ((D $t['milestone r3']) -gt $m0) ('Meilenstein ziehen: {0:dd.MM.} → {1:dd.MM.}' -f $m0, (D $t['milestone r3']))
 
     # 7. Ein Rückgängig nimmt das ganze Ziehen zurück
     $before = $t['bar r2']
     $slide.Shapes.Item($name).Select()
-    [void]$api.GanttDrag('bar r2', 1, '20;40;70', $false)
+    [void]$api.GanttDrag('bar r2', 1, (Steps 1, 3, 5.2), $false)
     $pp.CommandBars.ExecuteMso('Undo'); Start-Sleep -Milliseconds 400
     $slide.Shapes.Item($name).Select()
     Expect ((Targets $api)['bar r2'] -eq $before) 'ein Rückgängig nimmt das ganze Ziehen zurück'
@@ -105,7 +107,7 @@ try {
     # 8. Datenblatt: zeigt gezogene Daten, Eingabe zeichnet neu
     $api.OpenDatasheet($false)
     Expect ($api.DatasheetCell(0, 1) -eq 'Start' -and $api.DatasheetCell(2, 0) -eq 'Analyse') 'Datenblatt: Überschriften und Aktivitäten'
-    [void]$api.GanttDrag('bar r2', 1, '25', $false)
+    [void]$api.GanttDrag('bar r2', 1, (Steps 2.2), $false)
     $t = Targets $api
     Expect ($api.DatasheetCell(2, 2) -eq ('{0:dd.MM.yyyy}' -f (EndOf $t 'bar r2'))) "offenes Datenblatt folgt dem Ziehen ($($api.DatasheetCell(2, 2)))"
     $newEnd = (StartOf $t 'bar r2').AddDays(10)
@@ -117,7 +119,7 @@ try {
     # 9. Skalenende ziehen: Bereich in Einheiten der feinsten Skala
     $slide.Shapes.Item($name).Select()
     $range0 = (Targets $api)['range']
-    [void]$api.GanttDrag('range', 1, '60;120', $false)
+    [void]$api.GanttDrag('range', 1, (Steps 10, 20), $false)
     $t = Targets $api
     $rangeEnd = D (($t['range'] -split '\.\.')[1])
     Expect ($t['range'] -ne $range0 -and $rangeEnd -gt (D (($range0 -split '\.\.')[1]))) "Skalenende ziehen verlängert den Bereich ($range0 → $($t['range']))"
@@ -190,7 +192,47 @@ try {
     do { Start-Sleep -Milliseconds 250; $l = $slide.Shapes.Item($name).Tags.Item('RETHINK_LAYOUT'); $w = [double]($l.Split(';')[6]); $ok = [math]::Abs($w - $slide.Shapes.Item($name).Width) -lt 1 -and [math]::Abs($w - $target) -lt 8 } until ($ok -or (Get-Date) -gt $deadline)
     Expect $ok 'Größenänderung zeichnet neu'
 
-    # 14. Bild
+    # 14. Eigenes Kontextmenü (Rechtsklick) und seine Einstellungen
+    $group = $slide.Shapes.Item($name)
+    $group.Select(); Start-Sleep -Milliseconds 300
+    $c = Center $group.GroupItems.Item('bar r2')
+    $menu = $api.GanttMenu($c[0], $c[1])
+    Expect ($menu -match 'Form > Chevron=rowShape=chevron' -and $menu -match 'Verbinden mit \(Vorgänger\) > Konzept=link=Konzept') 'Rechtsklick auf Balken: Form und Verbinden mit …'
+    Expect ($menu -match 'Skalen > Tag=scale:day=1' -and $menu -match 'Format der Skalen > Monat > ' -and $menu -match 'Spalten > Kategorie=column:category=1') 'Menü: Skalen, Skalenformate, Spalten'
+    Expect ($menu -match 'Trennlinien > Senkrecht.*\[x\]=separators=0' -and $menu -match 'Trennlinien > Waagerecht.*=rowSeparators=1' -and $menu -match 'Wochenenden > Leicht grau \[x\]') 'Menü: Trennlinien senkrecht/waagerecht, Wochenenden'
+    Expect ($menu -match 'Design > Standard \[x\]=design=standard' -and $menu -match 'Balkenbreite und Formen > Breit=barHeight=0.75') 'Menü: Design und Balkenbreite'
+    $api.GanttCommand('rowShape=chevron', $c[0], $c[1])
+    Expect ($slide.Shapes.Item($name).GroupItems.Item('bar r2').AutoShapeType -eq 52) 'Form per Rechtsklick: Balken wird Chevron'
+    $api.GanttCommand('rowSeparators=1')
+    Expect ((Roles $slide.Shapes.Item($name)) -contains 'row line r3') 'waagerechte Trennlinien an'
+    $api.GanttCommand('weekends=plain')
+    Expect (-not ((Roles $slide.Shapes.Item($name)) -match '^weekend')) 'Wochenenden normal (ohne Grau)'
+    $api.GanttCommand('weekends=shaded')
+    $h0 = $slide.Shapes.Item($name).GroupItems.Item('bar r3').Height
+    $api.GanttCommand('barHeight=0.90')
+    Expect ($slide.Shapes.Item($name).GroupItems.Item('bar r3').Height -gt $h0) 'Balkenbreite einstellbar'
+    $api.GanttCommand('format:month=MMM')
+    $months = @($slide.Shapes.Item($name).GroupItems | Where-Object { $_.Name -match '^scale month \d+$' } | ForEach-Object { $_.TextFrame.TextRange.Text })
+    Expect ($months.Count -gt 0 -and ($months | Where-Object { $_.Length -gt 4 }).Count -eq 0) "Format der Monatsskala: $($months -join ' ')"
+    # Kategorien im Datenblatt eintragen, dann nach Kategorie sortieren (gewählte Reihenfolge)
+    $api.OpenDatasheet($false)
+    $api.DatasheetEnter(2, 6, 'Planung'); $api.DatasheetEnter(3, 6, 'Bau'); $api.DatasheetEnter(4, 6, 'Planung'); $api.DatasheetEnter(5, 6, 'Bau')
+    $roles = Roles $slide.Shapes.Item($name)
+    Expect ($roles -contains 'headline category' -and $roles -contains 'category label r2') 'Kategoriespalte erscheint mit den Einträgen'
+    $api.GanttCommand('sortCategories=Bau|Planung')
+    $g = $slide.Shapes.Item($name)
+    Expect ($g.GroupItems.Item('activity r2').TextFrame.TextRange.Text -eq 'Konzept' -and $g.GroupItems.Item('activity r4').TextFrame.TextRange.Text -eq 'Analyse') 'nach Kategorie sortiert: Bau zuerst, Reihenfolge innerhalb bleibt'
+    Expect ($api.DatasheetCell(2, 0) -eq 'Konzept' -and $api.DatasheetCell(2, 6) -eq 'Bau') 'offenes Datenblatt zeigt die sortierte Tabelle'
+    $api.CloseDatasheet()
+    $api.GanttCommand('design=modern')
+    $roles = Roles $slide.Shapes.Item($name)
+    Expect ($roles -contains 'header band' -and $slide.Shapes.Item($name).GroupItems.Item('category r2').Type -eq 1) 'Design Modern: Kopfband, Kategorie-Blöcke'
+    $row = $slide.Shapes.Item($name).GroupItems.Item('bar r3'); $c = Center $row
+    $api.GanttCommand('link=Konzept', $c[0], $c[1])
+    Expect ((Roles $slide.Shapes.Item($name)) -match '^link r3 1 arrow$') 'Verbinden mit Vorgänger per Rechtsklick'
+    $api.GanttCommand('design=standard')
+
+    # 15. Bild
     $slide.Export((Join-Path $OutDir 'slide1.png'), 'PNG', 1600, 900)
     if ($KeepOpen) { $slide.Shapes.Item($name).Select() }
 } finally {

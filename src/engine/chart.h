@@ -23,14 +23,16 @@ struct Box {
 
 struct Color {
     enum class Kind { None, Scheme, Rgb } kind = Kind::None;
-    std::wstring scheme;  // "accent1", "tx1", "bg1" …
+    std::wstring scheme;  // "accent1", "tx1", "bg1" … – Designfarben folgen dem Folienmaster
     std::uint32_t rgb = 0;
+    double brightness = 0;  // Schemafarben: -1 (dunkler) … +1 (heller), wie „Heller 75 %“ in PowerPoint
 
     static Color none() { return {}; }
-    static Color schemeColor(std::wstring name) {
+    static Color schemeColor(std::wstring name, double brightness = 0) {
         Color c;
         c.kind = Kind::Scheme;
         c.scheme = std::move(name);
+        c.brightness = brightness;
         return c;
     }
     static Color rgbColor(std::uint32_t value) {
@@ -48,6 +50,7 @@ struct Prim {
     enum class Kind { Rect, Line, Text, Shape } kind = Kind::Rect;
     Emu x = 0, y = 0, w = 0, h = 0;  // Linie: von (x, y) nach (x + w, y + h)
     Color fill, stroke, textColor;
+    double transparency = 0;  // Füllung: 1 = unsichtbar, aber anklickbar (Fläche hinter dem Diagramm)
     double strokePt = 0.75;
     bool dashed = false;
     std::wstring text;
@@ -156,10 +159,31 @@ bool isComputedCell(const Cell& cell);
 // Diagramm, ab Zeile 2 je Zeile eine Aktivität. Spalten: 0 Aktivität, 1 Start, 2 Ende, 3 Meilenstein, 4 Verantwortlich,
 // 5 Bemerkung. Ein Datum ohne Uhrzeit ist 00:00 Uhr – ein Balken, der am 20. endet, schließt den 20. nicht ein.
 
+// Weitere Spalten (rethink): 6 Kategorie (Zeilen gruppiert links neben den Aktivitäten), 7 Vorgänger (Aktivitätsnamen,
+// mit ; getrennt – als Pfeil verbunden), 8 Form des Balkens (Balken, Abgerundet, Fünfeck, Chevron), 9 Form des
+// Meilensteins (Raute, Dreieck, Kreis, Quadrat, Stern). Leere Formzellen nehmen die Vorgabe des Designs.
 namespace gantt {
 inline constexpr int kHeaderRow = 0, kMilestoneRow = 1, kFirstActivityRow = 2;
 inline constexpr int kLabelCol = 0, kStartCol = 1, kEndCol = 2, kMilestoneCol = 3, kResponsibleCol = 4, kRemarkCol = 5;
+inline constexpr int kCategoryCol = 6, kPredecessorCol = 7, kShapeCol = 8, kMarkerCol = 9;
+inline constexpr int kColumns = 10;
 }  // namespace gantt
+
+// Wirksame Gestaltung: Angaben der Optionen, sonst die Vorgaben des Designs.
+struct GanttLook {
+    double barHeight = 0.55;
+    std::wstring barShape, marker;  // kanonische Namen
+    CategoryStyle categoryStyle = CategoryStyle::Bracket;
+    bool categoryColors = false, separators = true, rowSeparators = false;
+};
+GanttLook ganttLook(const GanttOptions& options);
+
+// Kategorien in der Reihenfolge ihres ersten Auftretens (leere ausgenommen).
+std::vector<std::wstring> ganttCategories(const DataItem& item);
+// Formnamen der Spalten 8/9 (deutsch oder englisch) → kanonisch ("bar", "rounded", "pentagon", "chevron" bzw.
+// "diamond", "triangle", "circle", "square", "star"); leer, wenn unbekannt.
+std::wstring canonicalBarShape(const std::wstring& name);
+std::wstring canonicalMarker(const std::wstring& name);
 
 // Datum einer Zelle (Datum oder ISO-Text), sonst nullopt.
 std::optional<double> cellDate(const Cell& cell);

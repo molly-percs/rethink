@@ -51,4 +51,14 @@ void addGanttItem(DataItem& item, ChartOptions& options, GanttItem::Kind kind, i
 // Löscht das Element hinter einer Rolle (Datenblattzellen werden geleert).
 void deleteGanttTarget(DataItem& item, ChartOptions& options, const GanttTarget& target);
 
+// Text in eine Datenblattzelle schreiben (leer = Zelle leeren, Farbe bleibt), z. B. Form (Spalte 8) oder Marker (9).
+void setGanttText(DataItem& item, int row, int column, const std::wstring& text);
+
+// Vorgänger (Spalte 7) umschalten: ist `predecessor` eingetragen, wird er entfernt, sonst angehängt. Liefert den neuen Zustand.
+bool toggleGanttLink(DataItem& item, int row, const std::wstring& predecessor);
+
+// Aktivitätszeilen nach Kategorie sortieren: zuerst die Kategorien in `order`, dann übrige in Reihenfolge ihres Auftretens,
+// Zeilen ohne Kategorie zuletzt; innerhalb einer Kategorie bleibt die Reihenfolge. Frei gesetzte Elemente wandern mit.
+void sortGanttByCategory(DataItem& item, ChartOptions& options, const std::vector<std::wstring>& order);
+
 }  // namespace rethink::engine

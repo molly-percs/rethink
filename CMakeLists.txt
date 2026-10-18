@@ -51,6 +51,8 @@ add_library(rethink_addin SHARED
     addin/datasheet_window.cpp
     addin/calendar_window.cpp
     addin/gallery.cpp
+    addin/gantt_menu.cpp
+    addin/category_dialog.cpp
     addin/addin.rc
     addin/addin.def
 )

@@ -18,10 +18,17 @@ using namespace engine;
 constexpr wchar_t kRelTags[] = L"http://schemas.openxmlformats.org/officeDocument/2006/relationships/tags";
 constexpr wchar_t kTagsContentType[] = L"application/vnd.openxmlformats-officedocument.presentationml.tags+xml";
 
-std::wstring colorXml(const Color& c) {
+// Farbe als Füllung; Schemafarben mit Helligkeit wie PowerPoints „Heller/Dunkler x %“ (lumMod/lumOff).
+std::wstring colorXml(const Color& c, double transparency = 0) {
+    std::wstring mods;
+    if (c.kind == Color::Kind::Scheme && c.brightness > 0)
+        mods = std::format(L"<a:lumMod val=\"{}\"/><a:lumOff val=\"{}\"/>", std::lround((1 - c.brightness) * 100000), std::lround(c.brightness * 100000));
+    else if (c.kind == Color::Kind::Scheme && c.brightness < 0)
+        mods = std::format(L"<a:lumMod val=\"{}\"/>", std::lround((1 + c.brightness) * 100000));
+    if (transparency > 0) mods += std::format(L"<a:alpha val=\"{}\"/>", std::lround((1 - transparency) * 100000));
     switch (c.kind) {
-        case Color::Kind::Scheme: return std::format(L"<a:solidFill><a:schemeClr val=\"{}\"/></a:solidFill>", c.scheme);
-        case Color::Kind::Rgb: return std::format(L"<a:solidFill><a:srgbClr val=\"{:06X}\"/></a:solidFill>", c.rgb);
+        case Color::Kind::Scheme: return std::format(L"<a:solidFill><a:schemeClr val=\"{}\">{}</a:schemeClr></a:solidFill>", c.scheme, mods);
+        case Color::Kind::Rgb: return std::format(L"<a:solidFill><a:srgbClr val=\"{:06X}\">{}</a:srgbClr></a:solidFill>", c.rgb, mods);
         case Color::Kind::None: break;
     }
     return L"<a:noFill/>";
@@ -63,12 +70,12 @@ std::wstring primXml(const Prim& p, int id) {
             return std::format(
                 L"<p:sp><p:nvSpPr><p:cNvPr id=\"{}\" name=\"{}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>{}"
                 L"<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>{}<a:ln><a:noFill/></a:ln></p:spPr></p:sp>",
-                id, name, xfrmXml(p.x, p.y, p.w, p.h), colorXml(p.fill));
+                id, name, xfrmXml(p.x, p.y, p.w, p.h), colorXml(p.fill, p.transparency));
         case Prim::Kind::Shape:
             return std::format(
                 L"<p:sp><p:nvSpPr><p:cNvPr id=\"{}\" name=\"{}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>{}"
                 L"<a:prstGeom prst=\"{}\"><a:avLst/></a:prstGeom>{}<a:ln><a:noFill/></a:ln></p:spPr>{}</p:sp>",
-                id, name, xfrmXml(p.x, p.y, p.w, p.h, false, false, p.rotation), widen(p.shape), colorXml(p.fill),
+                id, name, xfrmXml(p.x, p.y, p.w, p.h, false, false, p.rotation), widen(p.shape), colorXml(p.fill, p.transparency),
                 p.text.empty() ? L"" : textBodyXml(p));
         case Prim::Kind::Line: {
             const bool flipH = p.w < 0, flipV = p.h < 0;

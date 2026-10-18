@@ -1,0 +1,79 @@
+[
+	{
+		"template": "out/waterfall-template.pptx",
+		"data": [
+			{ "name": "SlideTitle", "table": [[{ "string": "Design „Standard“: Kategorien mit Klammer, Verbindungen" }]] },
+			{
+				"name": "Bridge",
+				"chart": { "type": "gantt", "design": "standard", "start": "2026-11-01", "end": "2027-02-28", "barLabels": "range" },
+				"table": [
+					[{ "string": "Aktivität" }, { "string": "Start" }, { "string": "Ende" }, { "string": "Meilenstein" }, { "string": "Verantwortlich" }, { "string": "Bemerkung" }, { "string": "Phase" }, { "string": "Vorgänger" }, { "string": "Form" }, { "string": "Marker" }],
+					[{ "string": "Meilensteine" }, null, null, { "date": "2027-02-19" }],
+					[{ "string": "Analyse" }, { "date": "2026-11-02" }, { "date": "2026-11-21" }, null, null, null, { "string": "Planung" }],
+					[{ "string": "Konzept" }, { "date": "2026-11-23" }, { "date": "2026-12-19" }, { "date": "2026-12-18" }, null, null, { "string": "Planung" }, { "string": "Analyse" }],
+					[{ "string": "Umsetzung" }, { "date": "2027-01-04" }, { "date": "2027-02-06" }, null, null, null, { "string": "Bau" }, { "string": "Konzept" }, { "string": "Chevron" }],
+					[{ "string": "Schnittstellen" }, { "date": "2027-01-11" }, { "date": "2027-01-30" }, null, null, null, { "string": "Bau" }],
+					[{ "string": "Test" }, { "date": "2027-02-01" }, { "date": "2027-02-13" }, { "date": "2027-02-12" }, null, null, { "string": "Abnahme" }, { "string": "Umsetzung" }, null, { "string": "Stern" }],
+					[{ "string": "Schulung" }, { "date": "2027-02-08" }, { "date": "2027-02-20" }, null, null, null, { "string": "Abnahme" }]
+				]
+			}
+		]
+	},
+	{
+		"template": "out/waterfall-template.pptx",
+		"data": [
+			{ "name": "SlideTitle", "table": [[{ "string": "Design „Modern“: Blöcke, Kategoriefarben, Streifen" }]] },
+			{
+				"name": "Bridge",
+				"chart": { "type": "gantt", "design": "modern", "start": "2026-11-01", "end": "2027-02-28" },
+				"table": [
+					[{ "string": "Aktivität" }, { "string": "Start" }, { "string": "Ende" }, { "string": "Meilenstein" }, { "string": "Verantwortlich" }, { "string": "Bemerkung" }, { "string": "Phase" }, { "string": "Vorgänger" }],
+					[{ "string": "Meilensteine" }, null, null, { "date": "2027-02-19" }],
+					[{ "string": "Analyse" }, { "date": "2026-11-02" }, { "date": "2026-11-21" }, null, { "string": "Team A" }, null, { "string": "Planung" }],
+					[{ "string": "Konzept" }, { "date": "2026-11-23" }, { "date": "2026-12-19" }, { "date": "2026-12-18" }, { "string": "Team A" }, null, { "string": "Planung" }, { "string": "Analyse" }],
+					[{ "string": "Umsetzung" }, { "date": "2027-01-04" }, { "date": "2027-02-06" }, null, { "string": "Team B" }, null, { "string": "Bau" }, { "string": "Konzept" }],
+					[{ "string": "Schnittstellen" }, { "date": "2027-01-11" }, { "date": "2027-01-30" }, null, { "string": "Team B" }, null, { "string": "Bau" }],
+					[{ "string": "Test" }, { "date": "2027-02-01" }, { "date": "2027-02-13" }, { "date": "2027-02-12" }, { "string": "QS" }, null, { "string": "Abnahme" }, { "string": "Umsetzung" }],
+					[{ "string": "Schulung" }, { "date": "2027-02-08" }, { "date": "2027-02-20" }, null, { "string": "alle" }, null, { "string": "Abnahme" }]
+				]
+			}
+		]
+	},
+	{
+		"template": "out/waterfall-template.pptx",
+		"data": [
+			{ "name": "SlideTitle", "table": [[{ "string": "Design „Kontrast“: dunkles Kopfband, Zeilenlinien" }]] },
+			{
+				"name": "Bridge",
+				"chart": { "type": "gantt", "design": "contrast", "start": "2026-11-01", "end": "2027-02-28", "barHeight": 0.5 },
+				"table": [
+					[{ "string": "Aktivität" }, { "string": "Start" }, { "string": "Ende" }, { "string": "Meilenstein" }, null, null, { "string": "Phase" }],
+					[{ "string": "Meilensteine" }, null, null, { "date": "2027-02-19" }],
+					[{ "string": "Analyse" }, { "date": "2026-11-02" }, { "date": "2026-11-21" }, null, null, null, { "string": "Planung" }],
+					[{ "string": "Konzept" }, { "date": "2026-11-23" }, { "date": "2026-12-19" }, { "date": "2026-12-18" }, null, null, { "string": "Planung" }],
+					[{ "string": "Umsetzung" }, { "date": "2027-01-04" }, { "date": "2027-02-06" }, null, null, null, { "string": "Bau" }],
+					[{ "string": "Schnittstellen" }, { "date": "2027-01-11" }, { "date": "2027-01-30" }, null, null, null, { "string": "Bau" }],
+					[{ "string": "Test" }, { "date": "2027-02-01" }, { "date": "2027-02-13" }, { "date": "2027-02-12" }, null, null, { "string": "Abnahme" }]
+				]
+			}
+		]
+	},
+	{
+		"template": "out/waterfall-template.pptx",
+		"data": [
+			{ "name": "SlideTitle", "table": [[{ "string": "Design „Minimal“: schmale Balken, Dreiecke, ohne Linien" }]] },
+			{
+				"name": "Bridge",
+				"chart": { "type": "gantt", "design": "minimal", "start": "2026-11-01", "end": "2027-02-28", "milestoneLabels": true },
+				"table": [
+					[{ "string": "Aktivität" }, { "string": "Start" }, { "string": "Ende" }, { "string": "Meilenstein" }, null, null, { "string": "Phase" }],
+					[{ "string": "Meilensteine" }, null, null, { "date": "2027-02-19" }],
+					[{ "string": "Analyse" }, { "date": "2026-11-02" }, { "date": "2026-11-21" }, null, null, null, { "string": "Planung" }],
+					[{ "string": "Konzept" }, { "date": "2026-11-23" }, { "date": "2026-12-19" }, { "date": "2026-12-18" }, null, null, { "string": "Planung" }],
+					[{ "string": "Umsetzung" }, { "date": "2027-01-04" }, { "date": "2027-02-06" }, null, null, null, { "string": "Bau" }],
+					[{ "string": "Test" }, { "date": "2027-02-01" }, { "date": "2027-02-13" }, { "date": "2027-02-12" }, null, null, { "string": "Abnahme" }]
+				]
+			}
+		]
+	}
+]

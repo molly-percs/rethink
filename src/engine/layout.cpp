@@ -267,11 +267,13 @@ std::wstring formatValue(double value, int decimals, const std::wstring& decimal
 }
 
 bool samePrim(const Prim& a, const Prim& b) {
-    auto sameColor = [](const Color& x, const Color& y) { return x.kind == y.kind && x.scheme == y.scheme && x.rgb == y.rgb; };
+    auto sameColor = [](const Color& x, const Color& y) {
+        return x.kind == y.kind && x.scheme == y.scheme && x.rgb == y.rgb && x.brightness == y.brightness;
+    };
     return a.kind == b.kind && a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h && a.text == b.text && a.role == b.role &&
            a.flags == b.flags && a.value == b.value && sameColor(a.fill, b.fill) && sameColor(a.stroke, b.stroke) &&
            sameColor(a.textColor, b.textColor) && a.fontPt == b.fontPt && a.strokePt == b.strokePt && a.bold == b.bold && a.shape == b.shape &&
-           a.rotation == b.rotation && a.dashed == b.dashed && a.align == b.align;
+           a.rotation == b.rotation && a.dashed == b.dashed && a.align == b.align && a.transparency == b.transparency;
 }
 
 int stepDecimals(const Cell& cell, const ChartOptions& options) {
@@ -313,10 +315,16 @@ int chartDecimals(const DataItem& item, const ChartOptions& options) {
 
 Drawing layoutChart(const DataItem& item, const ChartOptions& options, Box bounds) {
     switch (options.type) {
-        case ChartType::Waterfall:
-            return options.orientation == Orientation::Right || options.orientation == Orientation::Left
-                       ? layoutWaterfallHorizontal(item, options, bounds)
-                       : layoutWaterfallVertical(item, options, bounds);
+        case ChartType::Waterfall: {
+            Drawing d = options.orientation == Orientation::Right || options.orientation == Orientation::Left
+                            ? layoutWaterfallHorizontal(item, options, bounds)
+                            : layoutWaterfallVertical(item, options, bounds);
+            // Unsichtbare Fläche: ein Klick irgendwo ins Diagramm trifft das Element (sonst nur seine Formen)
+            Prim background = rect(bounds.x, bounds.y, bounds.w, bounds.h, Color::schemeColor(L"bg1"), "background");
+            background.transparency = 1;
+            d.prims.insert(d.prims.begin(), background);
+            return d;
+        }
         case ChartType::Gantt: return layoutGantt(item, options, bounds);
     }
     throw std::invalid_argument("unbekannter Diagrammtyp");

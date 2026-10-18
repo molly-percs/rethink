@@ -17,6 +17,7 @@ namespace rethink::addin {
 struct DatasheetCallbacks {
     std::function<void(const std::vector<Row>&)> changed;  // nach jeder Änderung
     std::function<void()> openInExcel;                      // Kontextmenü „In Excel bearbeiten“
+    std::function<void()> sortCategories;                   // Zeitplan: Kontextmenü „Nach Kategorie sortieren …“
     std::function<void()> closed;
 };
 

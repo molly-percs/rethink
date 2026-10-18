@@ -243,6 +243,81 @@ void addGanttItem(DataItem& item, ChartOptions& options, GanttItem::Kind kind, i
     options.gantt.items.push_back(it);
 }
 
+void setGanttText(DataItem& item, int row, int column, const std::wstring& text) {
+    if (text.empty()) {
+        if (Cell* cell = const_cast<Cell*>(cellIf(item, row, column))) {
+            const auto fill = cell->fill;
+            *cell = Cell{};
+            cell->fill = fill;
+        }
+        return;
+    }
+    Cell& cell = cellAt(item, row, column);
+    cell.kind = CellKind::String;
+    cell.text = text;
+}
+
+namespace {
+
+std::vector<std::wstring> splitNames(const std::wstring& list) {
+    std::vector<std::wstring> names;
+    for (size_t pos = 0; pos <= list.size();) {
+        const size_t sep = std::min(list.find_first_of(L";,", pos), list.size());
+        std::wstring name = list.substr(pos, sep - pos);
+        const auto a = name.find_first_not_of(L" \t"), b = name.find_last_not_of(L" \t");
+        if (a != std::wstring::npos) names.push_back(name.substr(a, b - a + 1));
+        pos = sep + 1;
+    }
+    return names;
+}
+
+}  // namespace
+
+bool toggleGanttLink(DataItem& item, int row, const std::wstring& predecessor) {
+    const Cell* cell = cellIf(item, row, kPredecessorCol);
+    std::vector<std::wstring> names = splitNames(cell && cell->kind == CellKind::String ? cell->text : L"");
+    const auto it = std::find(names.begin(), names.end(), predecessor);
+    const bool linked = it == names.end();
+    if (linked) names.push_back(predecessor);
+    else names.erase(it);
+    std::wstring joined;
+    for (auto& n : names) joined += (joined.empty() ? L"" : L"; ") + n;
+    setGanttText(item, row, kPredecessorCol, joined);
+    return linked;
+}
+
+void sortGanttByCategory(DataItem& item, ChartOptions& options, const std::vector<std::wstring>& order) {
+    const int first = kFirstActivityRow, count = static_cast<int>(item.table.size()) - first;
+    if (count <= 1) return;
+    std::vector<std::wstring> ranking = order;
+    for (auto& c : ganttCategories(item))
+        if (std::find(ranking.begin(), ranking.end(), c) == ranking.end()) ranking.push_back(c);
+    auto rank = [&](int r) {
+        const Cell* cell = cellIf(item, r, kCategoryCol);
+        std::wstring c = cell && cell->kind == CellKind::String ? cell->text : L"";
+        const auto a = c.find_first_not_of(L" \t"), b = c.find_last_not_of(L" \t");
+        c = a == std::wstring::npos ? L"" : c.substr(a, b - a + 1);
+        const auto it = std::find(ranking.begin(), ranking.end(), c);
+        return c.empty() || it == ranking.end() ? static_cast<int>(ranking.size()) : static_cast<int>(it - ranking.begin());
+    };
+    std::vector<int> rows(count);
+    for (int i = 0; i < count; ++i) rows[i] = first + i;
+    std::stable_sort(rows.begin(), rows.end(), [&](int a, int b) { return rank(a) < rank(b); });
+    // neue Lage jeder alten Zeile; Elemente und Schattierungen folgen
+    std::vector<int> newIndex(item.table.size());
+    for (int r = 0; r < first; ++r) newIndex[r] = r;
+    std::vector<Row> sorted(item.table.begin(), item.table.begin() + first);
+    for (int i = 0; i < count; ++i) {
+        newIndex[rows[i]] = first + i;
+        sorted.push_back(item.table[rows[i]]);
+    }
+    item.table = std::move(sorted);
+    for (auto& it : options.gantt.items)
+        if (it.row >= first && it.row < static_cast<int>(newIndex.size())) it.row = newIndex[it.row];
+    for (auto& r : options.gantt.shadedRows)
+        if (r >= first && r < static_cast<int>(newIndex.size())) r = newIndex[r];
+}
+
 void deleteGanttTarget(DataItem& item, ChartOptions& options, const GanttTarget& target) {
     if (target.kind == GanttTarget::Kind::None) return;
     if (target.item >= 0) {

@@ -19,6 +19,10 @@ enum class Orientation { Up, Down, Right, Left };
 enum class TimeUnit { Day, Week, Month, Quarter, Year };
 enum class WeekendMode { Plain, Shaded, Hidden };
 enum class BarLabel { None, Range, Start, End };
+// Gestaltungsvorlagen; alle Farben sind Designfarben des Folienmasters (Akzente, Text, Hintergrund mit Helligkeit).
+enum class GanttDesign { Standard, Modern, Contrast, Minimal };
+// Kategorien links: Klammer neben fettem Text, farbiger Block mit weißem Text, nur fetter Text
+enum class CategoryStyle { Bracket, Block, Text };
 
 // Frei gesetztes Zeitelement (nicht an Datenblattdaten gebunden), Teil von "chart.items".
 struct GanttItem {
@@ -36,7 +40,14 @@ struct GanttOptions {
     WeekendMode weekends = WeekendMode::Shaded;
     int weekendFirst = 6, weekendLast = 7;  // ISO-Wochentage (1 = Montag … 7 = Sonntag)
     int weekStart = 1;                 // erster Wochentag
-    bool separators = true;            // senkrechte Trennlinien an den Skaleneinheiten
+    GanttDesign design = GanttDesign::Standard;
+    std::optional<bool> separators;    // senkrechte Trennlinien an den Skaleneinheiten; ohne Angabe: Design
+    std::optional<double> barHeight;   // Balkenhöhe als Anteil der Zeilenhöhe (0,2 … 0,9); ohne Angabe: Design
+    std::wstring barShape, milestoneShape;      // Vorgabeformen (kanonische Namen); leer = Design
+    std::optional<bool> category;               // Kategoriespalte; ohne Angabe: sichtbar, wenn es Einträge gibt
+    std::optional<CategoryStyle> categoryStyle; // ohne Angabe: Design
+    std::optional<bool> categoryColors;         // Balken und Meilensteine in der Farbe ihrer Kategorie; ohne Angabe: Design
+    bool links = true;                          // Vorgänger (Spalte 7) als Pfeile verbinden
     BarLabel barLabels = BarLabel::None;
     bool milestoneLabels = true;
     bool milestoneLines = false;       // Linie über alle Zeilen an den Meilensteinen der Meilensteinzeile
@@ -44,7 +55,7 @@ struct GanttOptions {
     std::wstring dayFormat, weekFormat, monthFormat, quarterFormat, yearFormat;  // Skalenformate; leer = Vorgabe
     std::optional<bool> responsible, remark;  // Beschriftungsspalten; ohne Angabe: sichtbar, wenn es Einträge gibt
     bool headlines = true;
-    bool rowSeparators = false;
+    std::optional<bool> rowSeparators;  // waagerechte Trennlinien zwischen den Zeilen; ohne Angabe: Design
     std::vector<int> shadedRows;       // Zeilen ("table"-Index) mit Hintergrund
     bool todayLine = false;            // Heute-Linie (gestrichelt)
     std::wstring today;                // ihr Datum (ISO); leer = referenceDay

@@ -352,9 +352,17 @@ void testGanttLayout() {
     for (auto& p : d.prims)
         if (p.role.starts_with("separator")) ++separators, dashed += p.dashed;
     check(separators > 0 && dashed > 0 && dashed < separators, "Gantt: Trennlinien – Monate durchgezogen, Wochen gestrichelt");
-    bool noWeekend = true;
-    for (auto& p : d.prims) noWeekend = noWeekend && !p.role.starts_with("weekend");
-    check(noWeekend, "Gantt: Wochenenden bei schmalen Tagen nicht schattiert");
+    bool weekends = false;
+    for (auto& p : d.prims) weekends = weekends || p.role.starts_with("weekend");
+    check(weekends, "Gantt: Wochenenden auch in der Wochenansicht leicht grau");
+    check(d.prims.front().role == "background" && d.prims.front().transparency == 1, "Gantt: unsichtbare Fläche hinter allem (Klick trifft das Diagramm)");
+    {
+        ChartOptions years = ganttOptions();
+        years.gantt.end = L"2028-12-31";
+        bool none = true;
+        for (auto& p : layoutChart(item, years, box).prims) none = none && !p.role.starts_with("weekend");
+        check(none, "Gantt: über zwei Jahre keine Wochenenden (zu schmal)");
+    }
 
     // Zwei Wochen: Tagesskala, Wochenenden schattiert, Meilensteine in der Tagesmitte
     o.gantt.start = L"2026-12-01";
@@ -406,7 +414,8 @@ void testGanttLayout() {
     const Prim* chevron = find(withItems, "item 0");
     check(chevron && chevron->shape == "chevron" && chevron->text == L"Phase 2", "Gantt: Chevron mit Text");
     const Prim* shade = find(withItems, "item 1");
-    check(shade && shade->flags == "shade" && shade == &withItems.prims.front(), "Gantt: Schattierung liegt ganz hinten");
+    check(shade && shade->flags == "shade" && find(withItems, "bar r2") && shade < find(withItems, "bar r2") && shade < find(withItems, "separator month 1"),
+          "Gantt: Schattierung liegt hinter Trennlinien und Balken");
     check(find(withItems, "item 1 label") && find(withItems, "item 1 label")->text == L"24.12.–01.01.", "Gantt: Schattierung mit Datumsbereich");
     check(find(withItems, "item 2") && find(withItems, "item 2 label")->text == L"Test", "Gantt: Klammer mit Text");
     const Prim* red = find(withItems, "item 3");
@@ -426,6 +435,86 @@ void testGanttLayout() {
         tooSmall = true;
     }
     check(tooSmall, "Gantt: zu niedriger Platzhalter wird gemeldet");
+}
+
+// Kategorien, Formen aus dem Datenblatt, Verbindungen und Designs
+void testGanttCategories() {
+    const Box box{0, 0, 9000000, 4000000};
+    DataItem item = plan();
+    for (auto& row : item.table) row.resize(gantt::kColumns);
+    item.table[0][gantt::kCategoryCol] = str(L"Kategorie");
+    item.table[2][gantt::kCategoryCol] = str(L"Planung");
+    item.table[3][gantt::kCategoryCol] = str(L"Planung");
+    item.table[4][gantt::kCategoryCol] = str(L"Bau");
+    item.table[3][gantt::kPredecessorCol] = str(L"Analyse");
+    item.table[4][gantt::kPredecessorCol] = str(L"konzept");  // Groß-/Kleinschreibung egal
+    item.table[3][gantt::kShapeCol] = str(L"Chevron");
+    item.table[3][gantt::kMarkerCol] = str(L"Dreieck");
+    check(ganttCategories(item) == std::vector<std::wstring>{L"Planung", L"Bau"}, "Kategorien in Reihenfolge des Auftretens");
+    check(canonicalBarShape(L"Fünfeck") == L"pentagon" && canonicalMarker(L"Stern") == L"star" && canonicalBarShape(L"Kreis").empty(),
+          "Formnamen deutsch/englisch");
+
+    ChartOptions o = ganttOptions();
+    Drawing d = layoutChart(item, o, box);
+    check(inside(d, box), "Kategorien: alle Formen im Platzhalter");
+    const Prim* head = find(d, "headline category");
+    const Prim* activity = find(d, "headline activity");
+    check(head && activity && head->x < activity->x, "Kategoriespalte steht links von den Aktivitäten");
+    const Prim* planung = find(d, "category label r2");
+    const Prim* bau = find(d, "category label r4");
+    check(planung && planung->text == L"Planung" && planung->bold && bau && bau->text == L"Bau", "eine fette Beschriftung je Kategoriegruppe");
+    check(find(d, "category r2") && find(d, "category line r4") && !find(d, "category line r2"), "Standard: Klammer je Gruppe, Linie zwischen den Gruppen");
+    check(planung && find(d, "bar r3") && planung->h > find(d, "bar r3")->h * 2, "Gruppe überspannt ihre Zeilen");
+    const Prim* chevron = find(d, "bar r3");
+    check(chevron && chevron->kind == Prim::Kind::Shape && chevron->shape == "chevron", "Form aus Spalte 8: Chevron");
+    const Prim* triangle = find(d, "milestone r3");
+    check(triangle && triangle->shape == "triangle" && triangle->rotation == 180, "Marker aus Spalte 9: Dreieck mit Spitze nach unten");
+    check(find(d, "link r3 1 arrow") && find(d, "link r4 1 arrow"), "Vorgänger als Pfeile verbunden");
+    o.gantt.links = false;
+    check(!find(layoutChart(item, o, box), "link r3 1 arrow"), "Verbindungen ausschaltbar");
+
+    // Designs: Farben sind Designfarben, Modern mit Kopfband, abgerundeten Balken, Kategorie-Blöcken und Kategoriefarben
+    ChartOptions modern = ganttOptions();
+    modern.gantt.design = GanttDesign::Modern;
+    const Drawing m = layoutChart(item, modern, box);
+    check(find(m, "header band") && find(m, "category r2") && find(m, "category r2")->kind == Prim::Kind::Rect, "Modern: Kopfband und Kategorie-Blöcke");
+    const Prim* rounded = find(m, "bar r2");
+    check(rounded && rounded->shape == "roundRect" && rounded->fill.scheme == L"accent1", "Modern: abgerundete Balken in der Farbe ihrer Kategorie");
+    check(find(m, "bar r4") && find(m, "bar r4")->fill.scheme == L"accent2", "zweite Kategorie: zweite Akzentfarbe");
+    bool themed = true;
+    for (auto& p : m.prims)
+        for (const Color* c : {&p.fill, &p.stroke, &p.textColor}) themed = themed && c->kind != Color::Kind::Rgb;
+    check(themed, "Modern: nur Designfarben (folgen dem Folienmaster)");
+    ChartOptions thin = modern;
+    thin.gantt.barHeight = 0.3;
+    check(find(layoutChart(item, thin, box), "bar r2")->h < rounded->h, "Balkenhöhe einstellbar");
+    thin.gantt.categoryStyle = CategoryStyle::Text;
+    check(!find(layoutChart(item, thin, box), "category r2") && find(layoutChart(item, thin, box), "category label r2"), "Kategoriestil nur Text");
+    ChartOptions contrast = ganttOptions();
+    contrast.gantt.design = GanttDesign::Contrast;
+    const Drawing c = layoutChart(item, contrast, box);
+    check(find(c, "header band") && find(c, "header band")->fill.scheme == L"tx2" && find(c, "headline activity")->textColor.scheme == L"bg1",
+          "Kontrast: dunkles Kopfband mit heller Schrift");
+    check(find(c, "row line r3") && !find(c, "row line r4"), "Kontrast: Zeilenlinien, an Kategoriegrenzen die Kategorielinie");
+    ChartOptions minimal = ganttOptions();
+    minimal.gantt.design = GanttDesign::Minimal;
+    bool noSeparators = true;
+    for (auto& p : layoutChart(item, minimal, box).prims) noSeparators = noSeparators && !p.role.starts_with("separator");
+    check(noSeparators, "Minimal: keine senkrechten Trennlinien");
+    minimal.gantt.separators = true;
+    check(find(layoutChart(item, minimal, box), "separator month 1"), "Trennlinien einschaltbar trotz Design");
+
+    // Nach Kategorie sortieren: gewählte Reihenfolge, stabil, Elemente wandern mit
+    ChartOptions so = ganttOptions();
+    so.gantt.items = {{GanttItem::Kind::Bar, 4, L"2026-12-14", L"2026-12-18", L"", std::nullopt}};
+    so.gantt.shadedRows = {2};
+    DataItem sorted = item;
+    sortGanttByCategory(sorted, so, {L"Bau", L"Planung"});
+    check(sorted.table[2][0].text == L"Umsetzung" && sorted.table[3][0].text == L"Analyse" && sorted.table[4][0].text == L"Konzept",
+          "Sortieren: Bau zuerst, Planung stabil dahinter");
+    check(so.gantt.items[0].row == 2 && so.gantt.shadedRows[0] == 3, "Sortieren: Elemente und Schattierungen folgen ihrer Zeile");
+    check(toggleGanttLink(sorted, 4, L"Umsetzung") && sorted.table[4][gantt::kPredecessorCol].text == L"Analyse; Umsetzung", "Verbindung hinzufügen");
+    check(!toggleGanttLink(sorted, 4, L"Analyse") && sorted.table[4][gantt::kPredecessorCol].text == L"Umsetzung", "Verbindung entfernen");
 }
 
 void testGanttEdit() {
@@ -494,6 +583,7 @@ int main() {
     testOrientation();
     testDates();
     testGanttLayout();
+    testGanttCategories();
     testGanttEdit();
     testDatasheetRoundtrip();
     testEAtEnd();

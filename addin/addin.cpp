@@ -10,6 +10,7 @@
 #include "engine/dates.h"
 #include "events.h"
 #include "gallery.h"
+#include "gantt_menu.h"
 #include "officeapi.h"
 #include "resource.h"
 #include "version.h"
@@ -82,6 +83,7 @@ enum : DISPID {
     kCloseCalendar,
     kRibbonStatus,
     kActivateTab,
+    kGanttMenu,
 };
 
 struct Member {
@@ -104,7 +106,7 @@ constexpr Member kMembers[] = {
     {L"InsertElement", kInsertElement}, {L"GanttTargets", kGanttTargets}, {L"GanttDrag", kGanttDrag}, {L"GanttCommand", kGanttCommand},
     {L"GanttToggle", kGanttToggle}, {L"GanttPressed", kGanttPressed}, {L"SetGanttDates", kSetGanttDates}, {L"GanttHit", kGanttHit},
     {L"OpenCalendar", kOpenCalendar}, {L"CloseCalendar", kCloseCalendar}, {L"RethinkRibbonLoad", kOnRibbonLoad},
-    {L"RibbonStatus", kRibbonStatus}, {L"ActivateTab", kActivateTab},
+    {L"RibbonStatus", kRibbonStatus}, {L"ActivateTab", kActivateTab}, {L"GanttMenu", kGanttMenu},
 };
 
 // Kontextmenü „rethink-Zeitplan“ (im Original: Kontextmenüs von Zeilen, Elementen und Skalen). Steuerelement-IDs
@@ -483,6 +485,7 @@ public:
             case kSetGanttDates:
                 setGanttDates(app_.Get(), narrow(stringArg(params, 0, true)), stringArg(params, 1, false), stringArg(params, 2, true));
                 return S_OK;
+            case kGanttMenu: setString(result, ganttMenuText(app_.Get(), hitArg(app_.Get(), params, 0))); return S_OK;
             case kGanttHit: setString(result, hitText(ganttHitAtPoint(app_.Get(), doubleArg(params, 0), doubleArg(params, 1)))); return S_OK;
             case kOpenCalendar: openGanttCalendar(app_.Get(), narrow(stringArg(params, 0, true))); return S_OK;
             case kCloseCalendar: setBool(result, nullptr, calendarWindowOpen()); closeCalendarWindow(); return S_OK;

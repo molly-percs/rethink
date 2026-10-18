@@ -3,6 +3,7 @@
 #include "elements.h"
 
 #include "calendar_window.h"
+#include "category_dialog.h"
 #include "datasheet.h"
 #include "datasheet_window.h"
 #include "dispatch.h"
@@ -96,7 +97,7 @@ long themeColor(const std::wstring& scheme) {
 
 std::wstring signature(const Color& c) {
     switch (c.kind) {
-        case Color::Kind::Scheme: return L"s:" + c.scheme;
+        case Color::Kind::Scheme: return c.brightness == 0 ? L"s:" + c.scheme : std::format(L"s:{}@{:.2f}", c.scheme, c.brightness);
         case Color::Kind::Rgb: return std::format(L"r:{:06X}", c.rgb);
         case Color::Kind::None: break;
     }
@@ -104,10 +105,12 @@ std::wstring signature(const Color& c) {
 }
 
 void applyColor(IDispatch* colorFormat, const Color& c) {
-    if (c.kind == Color::Kind::Scheme)
+    if (c.kind == Color::Kind::Scheme) {
         disp::put(colorFormat, L"ObjectThemeColor", themeColor(c.scheme));
-    else if (c.kind == Color::Kind::Rgb)
+        if (c.brightness != 0) disp::put(colorFormat, L"Brightness", c.brightness);  // Designfarbe heller/dunkler, folgt dem Master
+    } else if (c.kind == Color::Kind::Rgb) {
         disp::put(colorFormat, L"RGB", static_cast<long>(((c.rgb >> 16) & 0xFF) | (c.rgb & 0xFF00) | ((c.rgb & 0xFF) << 16)));
+    }
 }
 
 std::wstring tagValue(IDispatch* shape, const wchar_t* tag) {
@@ -137,6 +140,8 @@ long autoShapeType(const std::string& preset) {
     if (preset == "homePlate") return 51;  // msoShapePentagon
     if (preset == "chevron") return 52;    // msoShapeChevron
     if (preset == "ellipse") return 9;     // msoShapeOval
+    if (preset == "roundRect") return 5;   // msoShapeRoundedRectangle
+    if (preset == "star5") return 92;      // msoShape5pointStar
     return kMsoShapeRectangle;
 }
 
@@ -169,6 +174,7 @@ ComPtr<IDispatch> drawPrim(IDispatch* shapes, const Prim& p) {
             auto fill = disp::object(shape.Get(), L"Fill");
             disp::call(fill.Get(), L"Solid");
             applyColor(disp::object(fill.Get(), L"ForeColor").Get(), p.fill);
+            if (p.transparency > 0) disp::put(fill.Get(), L"Transparency", p.transparency);
             disp::put(disp::object(shape.Get(), L"Line").Get(), L"Visible", 0L);
             disp::put(disp::object(shape.Get(), L"Shadow").Get(), L"Visible", 0L);
             if (p.rotation != 0) disp::put(shape.Get(), L"Rotation", p.rotation);
@@ -239,6 +245,12 @@ ComPtr<IDispatch> drawElement(IDispatch* shapes, const Drawing& d, const std::ws
 // Passt eine vorhandene Form an ihre Grundform an. Farben werden nur gesetzt, wenn sich die Vorgabe des Modells
 // geändert hat – eigene Formatierungen bleiben so erhalten.
 void updateShape(IDispatch* shape, const Prim& p) {
+    if (p.kind == Prim::Kind::Rect || p.kind == Prim::Kind::Shape) {
+        // Form gewechselt (z. B. Balken → Chevron, Meilenstein → Dreieck): Formtyp und Drehung anpassen
+        const long type = p.kind == Prim::Kind::Shape ? autoShapeType(p.shape) : kMsoShapeRectangle;
+        if (disp::call(shape, L"AutoShapeType").toLong() != type) disp::put(shape, L"AutoShapeType", type);
+        if (std::fabs(disp::call(shape, L"Rotation").toDouble() - p.rotation) > 0.01) disp::put(shape, L"Rotation", p.rotation);
+    }
     setGeometry(shape, p);
     if (p.kind == Prim::Kind::Rect || p.kind == Prim::Kind::Shape) {
         const auto sig = signature(p.fill);
@@ -487,7 +499,8 @@ DataItem sampleGantt(const std::wstring& name) {
     item.name = name;
     item.chartJson = std::format(LR"({{"type":"gantt","start":"{}","end":"{}"}})", isoDate(m0), isoDate(addUnits(m0, TimeUnit::Month, 3) - 1));
     item.table = {
-        {textCell(L"Aktivität"), textCell(L"Start"), textCell(L"Ende"), textCell(L"Meilenstein"), textCell(L"Verantwortlich"), textCell(L"Bemerkung")},
+        {textCell(L"Aktivität"), textCell(L"Start"), textCell(L"Ende"), textCell(L"Meilenstein"), textCell(L"Verantwortlich"), textCell(L"Bemerkung"),
+         textCell(L"Kategorie"), textCell(L"Vorgänger"), textCell(L"Form"), textCell(L"Marker")},
         {textCell(L"Meilensteine"), Cell{}, Cell{}, dateCell(m0 + 84)},
         {textCell(L"Analyse"), dateCell(m0 + 2), dateCell(m0 + 16)},
         {textCell(L"Konzept"), dateCell(m0 + 14), dateCell(m0 + 35), dateCell(m0 + 34)},
@@ -857,6 +870,8 @@ ElementInfo elementInfo(IDispatch* element) {
 
 namespace {
 
+void sortCategories(IDispatch* app, IDispatch* element, const std::wstring& order);  // Abschnitt Zeitplan
+
 struct GridContext {
     ComPtr<IDispatch> slide;
     long shapeId = 0;
@@ -955,6 +970,17 @@ void openDatasheet(IDispatch* app, bool show) {
             MessageBoxW(nullptr, widen(e.what()).c_str(), kTitle, MB_ICONWARNING);
         }
     };
+    if (elementInfo(element.Get()).gantt)
+        callbacks.sortCategories = [ctx]() {
+            try {
+                auto group = g_gridApp ? findShape(ctx->slide.Get(), ctx->shapeId) : nullptr;
+                if (!group) throw Error(std::format("Das Diagramm '{}' ist nicht mehr auf der Folie.", narrow(ctx->name)));
+                sortCategories(g_gridApp.Get(), group.Get(), L"");  // führt dieses Datenblatt mit
+                ctx->shapeId = disp::call(disp::object(disp::object(ctx->slide.Get(), L"Shapes").Get(), L"Item", ctx->name).Get(), L"Id").toLong();
+            } catch (const std::exception& e) {
+                MessageBoxW(ctx->window ? datasheetWindow(ctx->window) : nullptr, widen(e.what()).c_str(), kTitle, MB_ICONWARNING);
+            }
+        };
     callbacks.closed = [key, ctx]() {
         g_grids.erase(key);
         delete ctx;
@@ -1581,139 +1607,318 @@ void addItem(IDispatch* app, IDispatch* element, GanttItem::Kind kind, const Gan
 
 }  // namespace
 
-void ganttCommand(IDispatch* app, const std::wstring& id, const GanttHit& hit) {
-    auto element = selectedGantt(app);
-    IDispatch* e = element.Get();
-    if (id == L"rtkG_insertRow") {
-        const int before = hit.row >= gantt::kFirstActivityRow ? hit.row + 1 : std::numeric_limits<int>::max();
-        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { insertGanttRow(item, o, before, L"Neue Aktivität"); });
-    } else if (id == L"rtkG_duplicateRow") {
-        const int row = requireRow(hit);
-        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { duplicateGanttRow(item, o, row, false); });
-    } else if (id == L"rtkG_deleteRow") {
-        const int row = requireRow(hit);
-        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { deleteGanttRow(item, o, row); });
-    } else if (id == L"rtkG_rowUp" || id == L"rtkG_rowDown") {
-        const int row = requireRow(hit);
-        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) {
-            if (!moveGanttRow(item, o, row, id == L"rtkG_rowUp" ? -1 : 1)) throw std::invalid_argument("Die Zeile steht schon am Rand.");
-        });
-    } else if (id == L"rtkG_newBar") {
-        addItem(app, e, GanttItem::Kind::Bar, hit);
-    } else if (id == L"rtkG_newMilestone") {
-        addItem(app, e, GanttItem::Kind::Milestone, hit);
-    } else if (id == L"rtkG_newBracket") {
-        addItem(app, e, GanttItem::Kind::Bracket, hit);
-    } else if (id == L"rtkG_newShade") {
-        addItem(app, e, GanttItem::Kind::Shade, hit);
-    } else if (id == L"rtkG_newPentagon") {
-        addItem(app, e, GanttItem::Kind::Pentagon, hit);
-    } else if (id == L"rtkG_newChevron") {
-        addItem(app, e, GanttItem::Kind::Chevron, hit);
-    } else if (id == L"rtkG_deleteItem") {
-        if (hit.role.empty()) throw Error("Bitte mit der rechten Maustaste auf einen Balken, Meilenstein, eine Klammer oder Schattierung klicken.");
-        const std::string role = hit.role;
-        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { deleteGanttTarget(item, o, ganttTarget(item, o, role)); });
-    } else if (id == L"rtkG_fit") {
-        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) {
-            if (!fitGanttRange(item, o)) throw std::invalid_argument("Der Zeitplan enthält noch keine Daten.");
-        });
-    } else if (id == L"rtkG_autoScales") {
-        modifyGantt(app, e, [&](DataItem&, ChartOptions& o) { o.gantt.scales.clear(); });
-    } else if (id == L"rtkG_calendar") {
-        openGanttCalendar(app, hit.inScale ? std::string() : hit.role);
-    } else if (id == L"rtkG_datasheet") {
-        openDatasheet(app, true);
-    } else {
-        throw Error("Unbekannter Befehl: " + narrow(id));
-    }
-}
-
 namespace {
 
-std::optional<TimeUnit> scaleOfToggle(const std::wstring& id) {
-    static const std::pair<const wchar_t*, TimeUnit> kScales[] = {{L"rtkT_scaleYear", TimeUnit::Year},
-                                                                   {L"rtkT_scaleQuarter", TimeUnit::Quarter},
-                                                                   {L"rtkT_scaleMonth", TimeUnit::Month},
-                                                                   {L"rtkT_scaleWeek", TimeUnit::Week},
-                                                                   {L"rtkT_scaleDay", TimeUnit::Day}};
-    for (auto& [name, unit] : kScales)
-        if (id == name) return unit;
+// IDs des PowerPoint-Kontextmenüs → Befehle
+std::wstring commandOfId(const std::wstring& id) {
+    static const std::map<std::wstring, std::wstring> kIds = {
+        {L"rtkG_insertRow", L"insertRow"},     {L"rtkG_duplicateRow", L"duplicateRow"}, {L"rtkG_deleteRow", L"deleteRow"},
+        {L"rtkG_rowUp", L"rowUp"},             {L"rtkG_rowDown", L"rowDown"},           {L"rtkG_newBar", L"new=bar"},
+        {L"rtkG_newMilestone", L"new=milestone"}, {L"rtkG_newBracket", L"new=bracket"}, {L"rtkG_newShade", L"new=shade"},
+        {L"rtkG_newPentagon", L"new=pentagon"}, {L"rtkG_newChevron", L"new=chevron"},   {L"rtkG_deleteItem", L"deleteItem"},
+        {L"rtkG_fit", L"fit"},                 {L"rtkG_autoScales", L"scales=auto"},    {L"rtkG_calendar", L"calendar"},
+        {L"rtkG_datasheet", L"datasheet"},
+    };
+    const auto it = kIds.find(id);
+    return it == kIds.end() ? id : it->second;
+}
+
+// Umschalter des PowerPoint-Kontextmenüs → Befehl mit Zustand
+std::wstring commandOfToggle(const std::wstring& id, bool pressed) {
+    const std::wstring on = pressed ? L"1" : L"0";
+    static const std::map<std::wstring, std::wstring> kKeys = {
+        {L"rtkT_scaleYear", L"scale:year"},     {L"rtkT_scaleQuarter", L"scale:quarter"}, {L"rtkT_scaleMonth", L"scale:month"},
+        {L"rtkT_scaleWeek", L"scale:week"},     {L"rtkT_scaleDay", L"scale:day"},         {L"rtkT_separators", L"separators"},
+        {L"rtkT_rowSeparators", L"rowSeparators"}, {L"rtkT_milestoneLabels", L"milestoneLabels"}, {L"rtkT_milestoneLines", L"milestoneLines"},
+        {L"rtkT_headlines", L"headlines"},       {L"rtkT_today", L"today"},               {L"rtkT_responsible", L"column:responsible"},
+        {L"rtkT_remark", L"column:remark"},      {L"rtkT_rowShade", L"rowShade"},
+    };
+    if (id == L"rtkT_weekendsShaded") return pressed ? L"weekends=shaded" : L"weekends=plain";
+    if (id == L"rtkT_weekendsHidden") return pressed ? L"weekends=hidden" : L"weekends=shaded";
+    if (id == L"rtkT_barLabels") return pressed ? L"barLabels=range" : L"barLabels=none";
+    const auto it = kKeys.find(id);
+    if (it == kKeys.end()) throw Error("Unbekannter Schalter: " + narrow(id));
+    return it->second + L"=" + on;
+}
+
+std::optional<TimeUnit> unitOf(const std::wstring& name) {
+    static const std::pair<const wchar_t*, TimeUnit> kUnits[] = {
+        {L"year", TimeUnit::Year}, {L"quarter", TimeUnit::Quarter}, {L"month", TimeUnit::Month}, {L"week", TimeUnit::Week}, {L"day", TimeUnit::Day}};
+    for (auto& [n, u] : kUnits)
+        if (name == n) return u;
     return std::nullopt;
+}
+
+std::wstring& formatOf(GanttOptions& g, TimeUnit unit) {
+    switch (unit) {
+        case TimeUnit::Day: return g.dayFormat;
+        case TimeUnit::Week: return g.weekFormat;
+        case TimeUnit::Month: return g.monthFormat;
+        case TimeUnit::Quarter: return g.quarterFormat;
+        case TimeUnit::Year: return g.yearFormat;
+    }
+    return g.dayFormat;
+}
+
+template <size_t N>
+int choice(const std::wstring& value, const wchar_t* const (&names)[N]) {
+    for (size_t i = 0; i < N; ++i)
+        if (value == names[i]) return static_cast<int>(i);
+    throw std::invalid_argument("Unbekannter Wert: " + narrow(value));
+}
+
+bool flag(const std::wstring& value) { return value == L"1" || value == L"true" || value == L"on"; }
+
+// Optionen setzen (alles außer Zeilen- und Elementaktionen). shown: gezeigte Skalen (für das erste manuelle Umschalten).
+bool setOption(GanttOptions& g, const std::wstring& key, const std::wstring& value, const std::vector<TimeUnit>& shown, const GanttHit& hit) {
+    static constexpr const wchar_t* kDesigns[] = {L"standard", L"modern", L"contrast", L"minimal"};
+    static constexpr const wchar_t* kWeekends[] = {L"plain", L"shaded", L"hidden"};
+    static constexpr const wchar_t* kLabels[] = {L"none", L"range", L"start", L"end"};
+    static constexpr const wchar_t* kStyles[] = {L"bracket", L"block", L"text"};
+    if (key == L"design") {
+        g.design = static_cast<GanttDesign>(choice(value, kDesigns));
+        // ein neues Design setzt die von ihm bestimmten Einzelangaben zurück
+        g.barHeight.reset(), g.barShape.clear(), g.milestoneShape.clear(), g.categoryStyle.reset(), g.categoryColors.reset();
+        g.separators.reset(), g.rowSeparators.reset();
+    } else if (key == L"barHeight") {
+        g.barHeight = std::clamp(std::stod(value), 0.15, 0.95);
+    } else if (key == L"barShape") {
+        g.barShape = canonicalBarShape(value);
+    } else if (key == L"milestoneShape") {
+        g.milestoneShape = canonicalMarker(value);
+    } else if (key == L"weekends") {
+        g.weekends = static_cast<WeekendMode>(choice(value, kWeekends));
+    } else if (key == L"separators") {
+        g.separators = flag(value);
+    } else if (key == L"rowSeparators") {
+        g.rowSeparators = flag(value);
+    } else if (key == L"milestoneLines") {
+        g.milestoneLines = flag(value);
+    } else if (key == L"milestoneLabels") {
+        g.milestoneLabels = flag(value);
+    } else if (key == L"headlines") {
+        g.headlines = flag(value);
+    } else if (key == L"today") {
+        g.todayLine = flag(value), g.today.clear();
+    } else if (key == L"links") {
+        g.links = flag(value);
+    } else if (key == L"barLabels") {
+        g.barLabels = static_cast<BarLabel>(choice(value, kLabels));
+    } else if (key == L"dateFormat") {
+        g.dateFormat = value;
+    } else if (key == L"categoryStyle") {
+        g.categoryStyle = static_cast<CategoryStyle>(choice(value, kStyles));
+    } else if (key == L"categoryColors") {
+        g.categoryColors = flag(value);
+    } else if (key == L"column:category") {
+        g.category = flag(value);
+    } else if (key == L"column:responsible") {
+        g.responsible = flag(value);
+    } else if (key == L"column:remark") {
+        g.remark = flag(value);
+    } else if (key == L"scales") {
+        if (value != L"auto") throw std::invalid_argument("scales=auto erwartet");
+        g.scales.clear();
+    } else if (key.starts_with(L"scale:")) {
+        const auto unit = unitOf(key.substr(6));
+        if (!unit) throw std::invalid_argument("Unbekannte Skala");
+        // Skalen von Hand: die automatische Wahl ist danach aus (wie im Original)
+        if (g.scales.empty()) g.scales = shown;
+        const auto it = std::find(g.scales.begin(), g.scales.end(), *unit);
+        if (flag(value) && it == g.scales.end()) g.scales.push_back(*unit);
+        if (!flag(value) && it != g.scales.end()) g.scales.erase(it);
+        if (g.scales.empty()) throw std::invalid_argument("Mindestens eine Skala muss sichtbar bleiben.");
+    } else if (key.starts_with(L"format:")) {
+        const auto unit = unitOf(key.substr(7));
+        if (!unit) throw std::invalid_argument("Unbekannte Skala");
+        formatOf(g, *unit) = value;  // leer = automatisch
+    } else if (key == L"rowShade") {
+        if (hit.row < gantt::kFirstActivityRow) throw std::invalid_argument("Bitte mit der rechten Maustaste auf eine Zeile klicken.");
+        auto& rows = g.shadedRows;
+        rows.erase(std::remove(rows.begin(), rows.end(), hit.row), rows.end());
+        if (flag(value)) rows.push_back(hit.row);
+    } else {
+        return false;
+    }
+    return true;
+}
+
+HWND ownerWindow() {
+    HWND frame = powerPointFrame();
+    return frame ? frame : GetActiveWindow();
+}
+
+// Kategorien sortieren: Reihenfolge aus dem Befehl oder aus dem Dialog
+void sortCategories(IDispatch* app, IDispatch* element, const std::wstring& value) {
+    std::vector<std::wstring> order;
+    if (value.empty()) {
+        const GanttModel m = ganttModel(element);
+        const auto categories = ganttCategories(m.item);
+        if (categories.empty()) throw Error("Es gibt noch keine Kategorien. Bitte im Datenblatt in der Spalte „Kategorie“ eintragen.");
+        const auto chosen = chooseCategoryOrder(ownerWindow(), categories);
+        if (!chosen) return;
+        order = *chosen;
+    } else {
+        for (size_t pos = 0; pos <= value.size();) {
+            const size_t sep = std::min(value.find(L'|', pos), value.size());
+            if (sep > pos) order.push_back(value.substr(pos, sep - pos));
+            pos = sep + 1;
+        }
+    }
+    modifyGantt(app, element, [&](DataItem& item, ChartOptions& o) { sortGanttByCategory(item, o, order); });
 }
 
 }  // namespace
 
-bool ganttPressed(IDispatch* app, const std::wstring& id, const GanttHit& hit) {
+void ganttCommand(IDispatch* app, const std::wstring& command, const GanttHit& hit) {
+    auto element = selectedGantt(app);
+    IDispatch* e = element.Get();
+    const std::wstring cmd = commandOfId(command);
+    const size_t eq = cmd.find(L'=');
+    const std::wstring key = cmd.substr(0, eq), value = eq == std::wstring::npos ? L"" : cmd.substr(eq + 1);
+
+    if (key == L"insertRow") {
+        const int before = hit.row >= gantt::kFirstActivityRow ? hit.row + 1 : std::numeric_limits<int>::max();
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { insertGanttRow(item, o, before, L"Neue Aktivität"); });
+    } else if (key == L"duplicateRow") {
+        const int row = requireRow(hit);
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { duplicateGanttRow(item, o, row, false); });
+    } else if (key == L"deleteRow") {
+        const int row = requireRow(hit);
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { deleteGanttRow(item, o, row); });
+    } else if (key == L"rowUp" || key == L"rowDown") {
+        const int row = requireRow(hit);
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) {
+            if (!moveGanttRow(item, o, row, key == L"rowUp" ? -1 : 1)) throw std::invalid_argument("Die Zeile steht schon am Rand.");
+        });
+    } else if (key == L"new") {
+        static const std::pair<const wchar_t*, GanttItem::Kind> kKinds[] = {
+            {L"bar", GanttItem::Kind::Bar},         {L"milestone", GanttItem::Kind::Milestone}, {L"bracket", GanttItem::Kind::Bracket},
+            {L"shade", GanttItem::Kind::Shade},     {L"pentagon", GanttItem::Kind::Pentagon},   {L"chevron", GanttItem::Kind::Chevron}};
+        const auto it = std::find_if(std::begin(kKinds), std::end(kKinds), [&](auto& k) { return value == k.first; });
+        if (it == std::end(kKinds)) throw Error("Unbekannte Elementart: " + narrow(value));
+        addItem(app, e, it->second, hit);
+    } else if (key == L"deleteItem") {
+        if (hit.role.empty()) throw Error("Bitte mit der rechten Maustaste auf einen Balken, Meilenstein, eine Klammer oder Schattierung klicken.");
+        const std::string role = hit.role;
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { deleteGanttTarget(item, o, ganttTarget(item, o, role)); });
+    } else if (key == L"rowShape" || key == L"rowMarker") {
+        // Form des angeklickten Elements: Datenblatt-Balken/-Meilenstein über Spalte 8/9, frei gesetzte Balken über ihre Art
+        const bool marker = key == L"rowMarker";
+        const std::wstring canonical = marker ? canonicalMarker(value) : canonicalBarShape(value);
+        if (!value.empty() && canonical.empty()) throw Error("Unbekannte Form: " + narrow(value));
+        const std::string role = hit.role;
+        const int row = hit.row;
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) {
+            const GanttTarget t = ganttTarget(item, o, role);
+            if (!marker && t.item >= 0 && t.kind == GanttTarget::Kind::Bar) {
+                GanttItem& it = o.gantt.items[t.item];
+                it.kind = canonical == L"pentagon" ? GanttItem::Kind::Pentagon : canonical == L"chevron" ? GanttItem::Kind::Chevron : GanttItem::Kind::Bar;
+                return;
+            }
+            if (row < gantt::kFirstActivityRow) throw std::invalid_argument("Bitte mit der rechten Maustaste auf einen Balken oder Meilenstein klicken.");
+            // im Datenblatt deutsch, wie man es dort auch eintippen würde
+            static const std::map<std::wstring, std::wstring> kNames = {
+                {L"bar", L"Balken"},   {L"rounded", L"Abgerundet"}, {L"pentagon", L"Fünfeck"}, {L"chevron", L"Chevron"}, {L"diamond", L"Raute"},
+                {L"triangle", L"Dreieck"}, {L"circle", L"Kreis"},   {L"square", L"Quadrat"},   {L"star", L"Stern"}};
+            setGanttText(item, row, marker ? gantt::kMarkerCol : gantt::kShapeCol, canonical.empty() ? L"" : kNames.at(canonical));
+        });
+    } else if (key == L"link") {
+        const int row = requireRow(hit);
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions&) { toggleGanttLink(item, row, value); });
+    } else if (key == L"fit") {
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) {
+            if (!fitGanttRange(item, o)) throw std::invalid_argument("Der Zeitplan enthält noch keine Daten.");
+        });
+    } else if (key == L"calendar") {
+        openGanttCalendar(app, hit.inScale || value == L"range" ? std::string() : hit.role);
+    } else if (key == L"datasheet") {
+        openDatasheet(app, true);
+    } else if (key == L"sortCategories") {
+        sortCategories(app, e, value);
+    } else {
+        std::vector<TimeUnit> shown;
+        if (key.starts_with(L"scale:")) shown = ganttModel(e).drawing.scales;
+        bool known = true;
+        modifyGantt(app, e, [&](DataItem&, ChartOptions& o) { known = setOption(o.gantt, key, value, shown, hit); });
+        if (!known) throw Error("Unbekannter Befehl: " + narrow(command));
+    }
+}
+
+GanttState ganttState(IDispatch* app, const GanttHit& hit) {
     auto element = selectedGantt(app);
     const GanttModel m = ganttModel(element.Get());
-    const GanttOptions& g = m.options.gantt;
-    if (const auto unit = scaleOfToggle(id)) return std::find(m.drawing.scales.begin(), m.drawing.scales.end(), *unit) != m.drawing.scales.end();
+    GanttState s;
+    s.options = m.options.gantt;
+    s.scales = m.drawing.scales;
+    const GanttLook look = ganttLook(s.options);
+    s.barHeight = look.barHeight, s.barShape = look.barShape, s.marker = look.marker;
+    s.categoryStyle = look.categoryStyle, s.categoryColors = look.categoryColors, s.separators = look.separators, s.rowSeparators = look.rowSeparators;
+    auto drawn = [&](const char* role) { return std::any_of(m.drawing.prims.begin(), m.drawing.prims.end(), [&](const Prim& p) { return p.role == role; }); };
+    s.categoryShown = drawn("headline category"), s.responsibleShown = drawn("headline responsible"), s.remarkShown = drawn("headline remark");
+    for (size_t r = gantt::kFirstActivityRow; r < m.item.table.size(); ++r)
+        s.activities.push_back(m.item.table[r].empty() ? L"" : cellText(m.item.table[r][gantt::kLabelCol]));
+    s.categories = ganttCategories(m.item);
+    if (!hit.role.empty()) {
+        const GanttTarget t = ganttTarget(m.item, m.options, hit.role);
+        s.targetIsItem = t.item >= 0;
+        switch (t.kind) {
+            case GanttTarget::Kind::Bar: s.targetKind = "bar"; break;
+            case GanttTarget::Kind::Milestone: s.targetKind = "milestone"; break;
+            case GanttTarget::Kind::Bracket: s.targetKind = "bracket"; break;
+            case GanttTarget::Kind::Shade: s.targetKind = "shade"; break;
+            case GanttTarget::Kind::None: break;
+        }
+        if (t.item >= 0 && t.kind == GanttTarget::Kind::Bar) {
+            const auto kind = m.options.gantt.items[t.item].kind;
+            s.rowShape = kind == GanttItem::Kind::Pentagon ? L"pentagon" : kind == GanttItem::Kind::Chevron ? L"chevron" : L"";
+        }
+    }
+    if (hit.row >= gantt::kFirstActivityRow && static_cast<size_t>(hit.row) < m.item.table.size()) {
+        const Row& row = m.item.table[hit.row];
+        auto text = [&](int c) { return static_cast<size_t>(c) < row.size() ? cellText(row[c]) : std::wstring(); };
+        if (!s.targetIsItem) s.rowShape = canonicalBarShape(text(gantt::kShapeCol));
+        s.rowMarker = canonicalMarker(text(gantt::kMarkerCol));
+        const std::wstring links = text(gantt::kPredecessorCol);
+        for (size_t pos = 0; pos <= links.size();) {
+            const size_t sep = std::min(links.find_first_of(L";,", pos), links.size());
+            std::wstring name = links.substr(pos, sep - pos);
+            const auto a = name.find_first_not_of(L" \t"), b = name.find_last_not_of(L" \t");
+            if (a != std::wstring::npos) s.rowLinks.push_back(name.substr(a, b - a + 1));
+            pos = sep + 1;
+        }
+        s.rowShaded = std::find(s.options.shadedRows.begin(), s.options.shadedRows.end(), hit.row) != s.options.shadedRows.end();
+    }
+    s.today = m.options.gantt.referenceDay;
+    s.language = m.options.language;
+    return s;
+}
+
+bool ganttPressed(IDispatch* app, const std::wstring& id, const GanttHit& hit) {
+    const GanttState s = ganttState(app, hit);
+    const GanttOptions& g = s.options;
+    auto scaleShown = [&](TimeUnit u) { return std::find(s.scales.begin(), s.scales.end(), u) != s.scales.end(); };
+    if (id == L"rtkT_scaleYear") return scaleShown(TimeUnit::Year);
+    if (id == L"rtkT_scaleQuarter") return scaleShown(TimeUnit::Quarter);
+    if (id == L"rtkT_scaleMonth") return scaleShown(TimeUnit::Month);
+    if (id == L"rtkT_scaleWeek") return scaleShown(TimeUnit::Week);
+    if (id == L"rtkT_scaleDay") return scaleShown(TimeUnit::Day);
     if (id == L"rtkT_weekendsShaded") return g.weekends == WeekendMode::Shaded;
     if (id == L"rtkT_weekendsHidden") return g.weekends == WeekendMode::Hidden;
-    if (id == L"rtkT_separators") return g.separators;
+    if (id == L"rtkT_separators") return s.separators;
+    if (id == L"rtkT_rowSeparators") return s.rowSeparators;
     if (id == L"rtkT_barLabels") return g.barLabels != BarLabel::None;
     if (id == L"rtkT_milestoneLabels") return g.milestoneLabels;
     if (id == L"rtkT_milestoneLines") return g.milestoneLines;
-    if (id == L"rtkT_rowSeparators") return g.rowSeparators;
     if (id == L"rtkT_headlines") return g.headlines;
     if (id == L"rtkT_today") return g.todayLine;
-    if (id == L"rtkT_rowShade") return std::find(g.shadedRows.begin(), g.shadedRows.end(), hit.row) != g.shadedRows.end();
-    // Beschriftungsspalten: sichtbar, wenn eine Überschrift dafür gezeichnet ist
-    auto shown = [&](const char* role) {
-        return std::any_of(m.drawing.prims.begin(), m.drawing.prims.end(), [&](const Prim& p) { return p.role == role; });
-    };
-    if (id == L"rtkT_responsible") return shown("headline responsible");
-    if (id == L"rtkT_remark") return shown("headline remark");
+    if (id == L"rtkT_rowShade") return s.rowShaded;
+    if (id == L"rtkT_responsible") return s.responsibleShown;
+    if (id == L"rtkT_remark") return s.remarkShown;
     return false;
 }
 
-void ganttToggle(IDispatch* app, const std::wstring& id, bool pressed, const GanttHit& hit) {
-    auto element = selectedGantt(app);
-    std::vector<TimeUnit> shown;
-    if (scaleOfToggle(id)) shown = ganttModel(element.Get()).drawing.scales;
-    modifyGantt(app, element.Get(), [&](DataItem&, ChartOptions& o) {
-        GanttOptions& g = o.gantt;
-        if (const auto unit = scaleOfToggle(id)) {
-            // Skalen von Hand: die automatische Wahl ist danach aus (wie im Original)
-            if (g.scales.empty()) g.scales = shown;
-            auto it = std::find(g.scales.begin(), g.scales.end(), *unit);
-            if (pressed && it == g.scales.end()) g.scales.push_back(*unit);
-            if (!pressed && it != g.scales.end()) g.scales.erase(it);
-            if (g.scales.empty()) throw std::invalid_argument("Mindestens eine Skala muss sichtbar bleiben.");
-        } else if (id == L"rtkT_weekendsShaded") {
-            g.weekends = pressed ? WeekendMode::Shaded : WeekendMode::Plain;
-        } else if (id == L"rtkT_weekendsHidden") {
-            g.weekends = pressed ? WeekendMode::Hidden : WeekendMode::Shaded;
-        } else if (id == L"rtkT_separators") {
-            g.separators = pressed;
-        } else if (id == L"rtkT_barLabels") {
-            g.barLabels = pressed ? BarLabel::Range : BarLabel::None;
-        } else if (id == L"rtkT_milestoneLabels") {
-            g.milestoneLabels = pressed;
-        } else if (id == L"rtkT_milestoneLines") {
-            g.milestoneLines = pressed;
-        } else if (id == L"rtkT_rowSeparators") {
-            g.rowSeparators = pressed;
-        } else if (id == L"rtkT_headlines") {
-            g.headlines = pressed;
-        } else if (id == L"rtkT_today") {
-            g.todayLine = pressed;
-            g.today.clear();
-        } else if (id == L"rtkT_responsible") {
-            g.responsible = pressed;
-        } else if (id == L"rtkT_remark") {
-            g.remark = pressed;
-        } else if (id == L"rtkT_rowShade") {
-            if (hit.row < gantt::kFirstActivityRow) throw std::invalid_argument("Bitte mit der rechten Maustaste auf eine Zeile klicken.");
-            auto& rows = g.shadedRows;
-            rows.erase(std::remove(rows.begin(), rows.end(), hit.row), rows.end());
-            if (pressed) rows.push_back(hit.row);
-        } else {
-            throw std::invalid_argument("Unbekannter Schalter");
-        }
-    });
-}
+void ganttToggle(IDispatch* app, const std::wstring& id, bool pressed, const GanttHit& hit) { ganttCommand(app, commandOfToggle(id, pressed), hit); }
 
 void setGanttDates(IDispatch* app, const std::string& role, const std::wstring& first, const std::wstring& last) {
     auto element = selectedGantt(app);

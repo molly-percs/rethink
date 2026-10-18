@@ -5,6 +5,7 @@
 #include "dispatch.h"
 #include "elements.h"
 #include "engine/chart.h"
+#include "gantt_menu.h"
 #include "overlay.h"
 
 #include <ocidl.h>
@@ -57,6 +58,12 @@ enum class Follow { None, Armed, Moving, Resizing };
 HHOOK g_mouseHook = nullptr;
 Follow g_follow = Follow::None;
 POINT g_followFrom{};
+
+// Rechtsklick auf einen Zeitplan: eigenes Kontextmenü statt PowerPoints Menü
+ComPtr<IDispatch> g_menuElement;
+POINT g_menuAt{};
+UINT_PTR g_menuTimer = 0;
+bool g_inMenu = false;
 
 void stopTracking() {
     g_follow = Follow::None;
@@ -446,9 +453,83 @@ void onOverlayAction(const OverlayHandle& handle, OverlayGesture gesture, int pi
     g_acting = false;
 }
 
+// Zeitplan auf der aktuellen Folie unter einem Bildschirmpunkt (der oberste), sonst nullptr.
+ComPtr<IDispatch> ganttAtScreen(POINT p) {
+    try {
+        const Mapping m = currentMapping();
+        const double x = m.pointX(p.x), y = m.pointY(p.y);
+        auto shapes = disp::object(disp::object(disp::object(disp::object(g_app.Get(), L"ActiveWindow").Get(), L"View").Get(), L"Slide").Get(), L"Shapes");
+        ComPtr<IDispatch> found;
+        const long count = disp::call(shapes.Get(), L"Count").toLong();
+        for (long i = 1; i <= count; ++i) {  // Folge der Stapelreihenfolge: der letzte Treffer liegt oben
+            auto shape = disp::object(shapes.Get(), L"Item", i);
+            if (disp::call(shape.Get(), L"Type").toLong() != 6 || !elementInfo(shape.Get()).gantt) continue;
+            const double l = disp::call(shape.Get(), L"Left").toDouble(), t = disp::call(shape.Get(), L"Top").toDouble();
+            if (x >= l && y >= t && x <= l + disp::call(shape.Get(), L"Width").toDouble() && y <= t + disp::call(shape.Get(), L"Height").toDouble())
+                found = shape;
+        }
+        return found;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void CALLBACK onShowMenu(HWND, UINT, UINT_PTR id, DWORD) {
+    KillTimer(nullptr, id);
+    g_menuTimer = 0;
+    ComPtr<IDispatch> element = std::move(g_menuElement);
+    if (!element || !g_app) return;
+    g_inMenu = true;
+    try {
+        if (!g_element || disp::call(g_element.Get(), L"Id").toLong() != disp::call(element.Get(), L"Id").toLong()) {
+            disp::call(element.Get(), L"Select");  // Rechtsklick auf einen nicht ausgewählten Zeitplan wählt ihn aus
+            g_element = element;
+            placeOverlay(true);
+        }
+        const Mapping m = currentMapping();
+        const GanttHit hit = ganttHitAt(element.Get(), m.pointX(g_menuAt.x), m.pointY(g_menuAt.y));
+        g_acting = true;  // eigene Änderungen: Auswahlereignisse nicht verarbeiten
+        showGanttMenu(g_app.Get(), powerPointWindow(), g_menuAt, hit);
+    } catch (const std::exception& e) {
+        MessageBoxW(powerPointWindow(), widen(e.what()).c_str(), L"rethink", MB_ICONINFORMATION);
+    } catch (...) {
+    }
+    g_acting = false;
+    g_inMenu = false;
+    try {
+        if (g_element) {
+            track();
+            if (g_element) placeOverlay(true);
+        }
+    } catch (...) {
+        stopTracking();
+    }
+}
+
+// Rechtsklick in einen Zeitplan (ausgewählt oder nicht): PowerPoint bekommt ihn nicht, nach dem Loslassen erscheint
+// das eigene Kontextmenü. Liefert true, wenn die Nachricht verschluckt wird.
+bool rightClick(WPARAM message, const MOUSEHOOKSTRUCT* info) {
+    if (g_inMenu || g_dragging || g_acting || !g_app) return false;
+    const POINT p = info->pt;
+    if (message == WM_RBUTTONDOWN) {
+        g_menuElement.Reset();
+        if (g_element && g_info.gantt && overlayVisible() && PtInRect(&g_shown.element, p)) g_menuElement = g_element;
+        else if (GetAncestor(info->hwnd, GA_ROOT) == powerPointWindow()) g_menuElement = ganttAtScreen(p);
+        return g_menuElement != nullptr;
+    }
+    if (message == WM_RBUTTONUP && g_menuElement) {
+        g_menuAt = p;
+        if (!g_menuTimer) g_menuTimer = SetTimer(nullptr, 0, 1, onShowMenu);  // nicht im Hook: Menü erst in der Nachrichtenschleife
+        return true;
+    }
+    return false;
+}
+
 // Maus-Hook: PowerPoint meldet Left/Top erst beim Loslassen. Bis dahin wird das Overlay um den Mausweg versetzt;
 // beim Ändern der Größe (Drücken auf einen Anfasser) verschwindet es und kommt nach dem Neu-Layout wieder.
 LRESULT CALLBACK onMouse(int code, WPARAM message, LPARAM lParam) {
+    if (code >= 0 && (message == WM_RBUTTONDOWN || message == WM_RBUTTONUP) && rightClick(message, reinterpret_cast<const MOUSEHOOKSTRUCT*>(lParam)))
+        return 1;
     if (code >= 0 && g_element && !g_dragging && !g_acting) {
         const auto* info = reinterpret_cast<const MOUSEHOOKSTRUCT*>(lParam);
         if (info->hwnd != overlayWindow()) {
