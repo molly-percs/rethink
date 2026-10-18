@@ -11,7 +11,7 @@ It consists of three parts that share one core:
 | **Command line tool** (`bin\rethink.exe`) | Builds presentations from `.ppttc` JSON data (the documented think-cell automation format): fills text fields, native PowerPoint charts and rethink charts in a template. |
 | **Layout engine** (`src/engine`) | Pure C++ (no COM, no XML). Computes chart geometry, labels, waterfall arithmetic (`e` = computed total) and the data table below a chart. Both the add-in and the CLI render its output. |
 
-> Status: work in progress (Windows 11, PowerPoint / Microsoft 365). Only the **waterfall** chart is implemented so far; see [docs/charting-ledger.md](docs/charting-ledger.md) for the full feature list and its status, and [HANDOFF.md](HANDOFF.md) for how to continue development.
+> Status: work in progress (Windows 11, PowerPoint / Microsoft 365). Implemented: **waterfall** (build-up/build-down, four orientations) and **Gantt / timeline** (insert via *rethink › Diagramm einfügen*, `"type": "gantt"` in `.ppttc`); see [docs/charting-ledger.md](docs/charting-ledger.md) for the full feature list and its status, and [HANDOFF.md](HANDOFF.md) for how to continue development.
 
 ---
 

@@ -96,6 +96,7 @@ struct Drawing {
     GanttAxis axis;                                // Zeitplan: Zeitachse (für Ziehen in Tagen)
     std::vector<RowBand> rows;                     // Zeitplan: Zeilen
     Emu scaleTop = 0, scaleBottom = 0;             // Zeitplan: Band der Kalenderskalen
+    std::vector<TimeUnit> scales;                  // Zeitplan: gezeigte Skalen (grob → fein)
 };
 
 // ---- Wasserfall ----------------------------------------------------------

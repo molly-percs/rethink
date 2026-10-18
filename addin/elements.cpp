@@ -2,10 +2,13 @@
 
 #include "elements.h"
 
+#include "calendar_window.h"
 #include "datasheet.h"
 #include "datasheet_window.h"
 #include "dispatch.h"
 #include "engine/chart.h"
+#include "engine/dates.h"
+#include "engine/gantt_edit.h"
 #include "ppttc.h"
 #include "render_element.h"
 #include "xlsx.h"
@@ -17,6 +20,8 @@
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -35,7 +40,8 @@ constexpr wchar_t kTitle[] = L"rethink";
 constexpr wchar_t kPrefix[] = L"rethink:";
 constexpr wchar_t kLayoutTag[] = L"RETHINK_LAYOUT";  // Layout-Rahmen und Gruppenrahmen beim letzten Zeichnen
 constexpr wchar_t kStyleTag[] = L"RETHINK_STYLE";    // zuletzt gesetzte Farbe einer Form (eigene Änderungen erkennen)
-constexpr wchar_t kSegmentTag[] = L"RETHINK_SEG";    // "pos", "neg", "e"
+constexpr wchar_t kSegmentTag[] = L"RETHINK_SEG";    // "pos", "neg", "e"; Zeitplan: "bar", "milestone", "bracket", "shade"
+constexpr wchar_t kKindTag[] = L"RETHINK_KIND";      // "waterfall up|down|right|left" oder "gantt"
 constexpr long kMsoShapeRectangle = 1;
 constexpr long kMsoTextOrientationHorizontal = 1;
 constexpr long kMsoGroup = 6;
@@ -124,16 +130,49 @@ void setGeometry(IDispatch* shape, const Prim& p) {
     disp::put(shape, L"Height", pt(std::abs(p.h)));
 }
 
+// msoAutoShapeType einer vordefinierten OOXML-Form
+long autoShapeType(const std::string& preset) {
+    if (preset == "diamond") return 4;     // msoShapeDiamond
+    if (preset == "triangle") return 7;    // msoShapeIsoscelesTriangle
+    if (preset == "homePlate") return 51;  // msoShapePentagon
+    if (preset == "chevron") return 52;    // msoShapeChevron
+    if (preset == "ellipse") return 9;     // msoShapeOval
+    return kMsoShapeRectangle;
+}
+
+// Textrahmen ohne Ränder und ohne automatische Größe, Text mittig
+void formatText(IDispatch* shape, const Prim& p) {
+    auto frame = disp::object(shape, L"TextFrame");
+    disp::put(frame.Get(), L"AutoSize", 0L);
+    disp::put(frame.Get(), L"WordWrap", 0L);
+    disp::put(frame.Get(), L"MarginLeft", 0.0);
+    disp::put(frame.Get(), L"MarginRight", 0.0);
+    disp::put(frame.Get(), L"MarginTop", 0.0);
+    disp::put(frame.Get(), L"MarginBottom", 0.0);
+    disp::put(frame.Get(), L"VerticalAnchor", kMsoAnchorMiddle);
+    auto range = disp::object(frame.Get(), L"TextRange");
+    disp::put(range.Get(), L"Text", p.text);
+    auto font = disp::object(range.Get(), L"Font");
+    disp::put(font.Get(), L"Size", p.fontPt);
+    if (p.bold) disp::put(font.Get(), L"Bold", -1L);
+    applyColor(disp::object(font.Get(), L"Color").Get(), p.textColor);
+    disp::put(disp::object(range.Get(), L"ParagraphFormat").Get(), L"Alignment", p.align == Align::Left ? 1L : p.align == Align::Right ? 3L : 2L);
+}
+
 // Eine Grundform über das Objektmodell zeichnen.
 ComPtr<IDispatch> drawPrim(IDispatch* shapes, const Prim& p) {
     switch (p.kind) {
-        case Prim::Kind::Rect: {
-            auto shape = disp::object(shapes, L"AddShape", kMsoShapeRectangle, pt(p.x), pt(p.y), pt(p.w), pt(p.h));
+        case Prim::Kind::Rect:
+        case Prim::Kind::Shape: {
+            const long type = p.kind == Prim::Kind::Shape ? autoShapeType(p.shape) : kMsoShapeRectangle;
+            auto shape = disp::object(shapes, L"AddShape", type, pt(p.x), pt(p.y), pt(p.w), pt(p.h));
             auto fill = disp::object(shape.Get(), L"Fill");
             disp::call(fill.Get(), L"Solid");
             applyColor(disp::object(fill.Get(), L"ForeColor").Get(), p.fill);
             disp::put(disp::object(shape.Get(), L"Line").Get(), L"Visible", 0L);
             disp::put(disp::object(shape.Get(), L"Shadow").Get(), L"Visible", 0L);
+            if (p.rotation != 0) disp::put(shape.Get(), L"Rotation", p.rotation);
+            if (!p.text.empty()) formatText(shape.Get(), p);
             return shape;
         }
         case Prim::Kind::Line: {
@@ -146,21 +185,7 @@ ComPtr<IDispatch> drawPrim(IDispatch* shapes, const Prim& p) {
         }
         case Prim::Kind::Text: {
             auto shape = disp::object(shapes, L"AddTextbox", kMsoTextOrientationHorizontal, pt(p.x), pt(p.y), pt(p.w), pt(p.h));
-            auto frame = disp::object(shape.Get(), L"TextFrame");
-            disp::put(frame.Get(), L"AutoSize", 0L);
-            disp::put(frame.Get(), L"WordWrap", 0L);
-            disp::put(frame.Get(), L"MarginLeft", 0.0);
-            disp::put(frame.Get(), L"MarginRight", 0.0);
-            disp::put(frame.Get(), L"MarginTop", 0.0);
-            disp::put(frame.Get(), L"MarginBottom", 0.0);
-            disp::put(frame.Get(), L"VerticalAnchor", kMsoAnchorMiddle);
-            auto range = disp::object(frame.Get(), L"TextRange");
-            disp::put(range.Get(), L"Text", p.text);
-            auto font = disp::object(range.Get(), L"Font");
-            disp::put(font.Get(), L"Size", p.fontPt);
-            applyColor(disp::object(font.Get(), L"Color").Get(), p.textColor);
-            disp::put(disp::object(range.Get(), L"ParagraphFormat").Get(), L"Alignment",
-                      p.align == Align::Left ? 1L : p.align == Align::Right ? 3L : 2L);
+            formatText(shape.Get(), p);
             setGeometry(shape.Get(), p);
             return shape;
         }
@@ -171,7 +196,7 @@ ComPtr<IDispatch> drawPrim(IDispatch* shapes, const Prim& p) {
 // Rolle, Farbsignatur und Segmentart an einer Form vermerken.
 void markShape(IDispatch* shape, const Prim& p) {
     disp::put(shape, L"Name", widen(p.role));
-    if (p.kind == Prim::Kind::Rect) setTag(shape, kStyleTag, signature(p.fill));
+    if (p.kind == Prim::Kind::Rect || p.kind == Prim::Kind::Shape) setTag(shape, kStyleTag, signature(p.fill));
     if (p.kind == Prim::Kind::Text) setTag(shape, kStyleTag, signature(p.textColor));
     if (!p.flags.empty()) setTag(shape, kSegmentTag, widen(p.flags));
 }
@@ -215,13 +240,17 @@ ComPtr<IDispatch> drawElement(IDispatch* shapes, const Drawing& d, const std::ws
 // geändert hat – eigene Formatierungen bleiben so erhalten.
 void updateShape(IDispatch* shape, const Prim& p) {
     setGeometry(shape, p);
-    if (p.kind == Prim::Kind::Rect) {
+    if (p.kind == Prim::Kind::Rect || p.kind == Prim::Kind::Shape) {
         const auto sig = signature(p.fill);
         if (tagValue(shape, kStyleTag) != sig) {
             applyColor(disp::object(disp::object(shape, L"Fill").Get(), L"ForeColor").Get(), p.fill);
             setTag(shape, kStyleTag, sig);
         }
         if (tagValue(shape, kSegmentTag) != widen(p.flags)) setTag(shape, kSegmentTag, widen(p.flags));
+        if (!p.text.empty()) {
+            auto range = disp::object(disp::object(shape, L"TextFrame").Get(), L"TextRange");
+            if (disp::call(range.Get(), L"Text").str() != p.text) disp::put(range.Get(), L"Text", p.text);
+        }
     } else if (p.kind == Prim::Kind::Text) {
         auto range = disp::object(disp::object(shape, L"TextFrame").Get(), L"TextRange");
         if (disp::call(range.Get(), L"Text").str() != p.text) disp::put(range.Get(), L"Text", p.text);
@@ -261,20 +290,37 @@ bool updateInPlace(IDispatch* group, const Drawing& d) {
 struct Prepared {
     Drawing drawing;
     std::wstring model;
+    std::wstring kind;  // RETHINK_KIND
 };
 
+std::wstring kindOf(const ChartOptions& options, const Drawing& d) {
+    if (options.type == ChartType::Gantt) return L"gantt";
+    static constexpr const wchar_t* kDirections[] = {L"up", L"down", L"right", L"left"};
+    return std::wstring(L"waterfall ") + kDirections[static_cast<int>(d.valueDirection)];
+}
+
+// Optionen wie beim Zeichnen: aus dem "chart"-Objekt plus Umgebung (Dezimaltrennzeichen, Sprache, heute). Worker-Thread.
+ChartOptions optionsOf(const DataItem& item) {
+    ChartOptions options = parseChartOptions(item.chartJson);
+    applyLocale(options);
+    return options;
+}
+
+Drawing layoutOrThrow(const DataItem& item, const ChartOptions& options, Box bounds) {
+    try {
+        return layoutChart(item, options, bounds);
+    } catch (const std::invalid_argument& e) {
+        throw Error(std::format("Diagramm '{}': {}", narrow(item.name), e.what()));
+    }
+}
+
 Prepared prepare(const DataItem& item, Box bounds) {
-    const std::wstring separator = localeDecimalSeparator();
     return onWorker([&] {
-        ChartOptions options = parseChartOptions(item.chartJson);
-        options.decimalSeparator = separator;
+        const ChartOptions options = optionsOf(item);
         Prepared p;
-        try {
-            p.drawing = layoutChart(item, options, bounds);
-        } catch (const std::invalid_argument& e) {
-            throw Error(std::format("Diagramm '{}': {}", narrow(item.name), e.what()));
-        }
+        p.drawing = layoutOrThrow(item, options, bounds);
         p.model = serializeDataItem(item);
+        p.kind = kindOf(options, p.drawing);
         return p;
     });
 }
@@ -325,20 +371,41 @@ void storeLayout(IDispatch* group, const Box& b) {
 }
 
 // Zeichnet ein Element (neu oder an Ort und Stelle) und vermerkt Modell und Layout.
+// Ist das Element (oder eine Form darin) gerade ausgewählt?
+bool isSelected(IDispatch* slide, IDispatch* group) {
+    try {
+        auto app = disp::object(slide, L"Application");
+        auto window = disp::object(app.Get(), L"ActiveWindow");
+        auto selected = rethinkElementOf(disp::object(window.Get(), L"Selection").Get());
+        return selected && disp::call(selected.Get(), L"Id").toLong() == disp::call(group, L"Id").toLong();
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 ComPtr<IDispatch> renderElement(IDispatch* slide, ComPtr<IDispatch> group, const DataItem& item, Box box) {
     const Prepared prepared = prepare(item, box);
     if (!group || !updateInPlace(group.Get(), prepared.drawing)) {
         long zorder = 0;
+        bool reselect = false;
         if (group) {
             zorder = disp::call(group.Get(), L"ZOrderPosition").toLong();
+            reselect = isSelected(slide, group.Get());  // ein neu gezeichnetes Element bleibt ausgewählt
             disp::call(group.Get(), L"Delete");
         }
         group = drawElement(disp::object(slide, L"Shapes").Get(), prepared.drawing, item.name);
         if (zorder > 0)
             for (int i = 0; i < 500 && disp::call(group.Get(), L"ZOrderPosition").toLong() > zorder; ++i)
                 disp::call(group.Get(), L"ZOrder", 3L);  // msoSendBackward: alte Stapelposition
+        if (reselect) {
+            try {
+                disp::call(group.Get(), L"Select");
+            } catch (const std::exception&) {
+            }
+        }
     }
     setTag(group.Get(), kModelTag, prepared.model);
+    if (tagValue(group.Get(), kKindTag) != prepared.kind) setTag(group.Get(), kKindTag, prepared.kind);
     storeLayout(group.Get(), prepared.drawing.bounds);
     return group;
 }
@@ -378,15 +445,54 @@ std::wstring freeName(IDispatch* slide, const std::wstring& stem) {
     return name;
 }
 
-DataItem sampleWaterfall(const std::wstring& name) {
-    auto text = [](const wchar_t* s) { return Cell{CellKind::String, s, 0, std::nullopt}; };
-    auto num = [](double v) { return Cell{CellKind::Number, L"", v, std::nullopt}; };
+Cell textCell(const std::wstring& s) { return Cell{CellKind::String, s, 0, std::nullopt}; }
+Cell numberCell(double v) { return Cell{CellKind::Number, L"", v, std::nullopt}; }
+Cell dateCell(double day) { return Cell{CellKind::Date, isoDate(day), 0, std::nullopt}; }
+
+const wchar_t* orientationName(Orientation o) {
+    static constexpr const wchar_t* kNames[] = {L"up", L"down", L"right", L"left"};
+    return kNames[static_cast<int>(o)];
+}
+
+// Aufbauend: Werte summieren sich zu e; abbauend (gespiegeltes Symbol im Original): die Summe steht links (e in der
+// ersten Spalte, rückwärts berechnet) und wird schrittweise abgebaut.
+DataItem sampleWaterfall(const std::wstring& name, bool buildDown, Orientation orientation) {
     DataItem item;
     item.name = name;
-    item.chartJson = LR"({"type":"waterfall","datatable":true})";
+    item.chartJson = std::format(LR"({{"type":"waterfall","datatable":true,"orientation":"{}"}})", orientationName(orientation));
+    if (buildDown) {
+        item.table = {
+            {Cell{}, textCell(L"Gesamt"), textCell(L"Personal"), textCell(L"Material"), textCell(L"Vertrieb"), textCell(L"Sonstiges")},
+            {textCell(L"Wert"), textCell(L"e"), numberCell(-40), numberCell(-25), numberCell(-20), numberCell(-15)},
+        };
+    } else {
+        item.table = {
+            {Cell{}, textCell(L"Start"), textCell(L"Umsatz"), textCell(L"Kosten"), textCell(L"Zwischensumme"), textCell(L"Sonstiges"), textCell(L"Ende")},
+            {textCell(L"Wert"), numberCell(100), numberCell(40), numberCell(-25), textCell(L"e"), numberCell(-10), textCell(L"e")},
+        };
+    }
+    return item;
+}
+
+double todayDays() {
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    return static_cast<double>(daysFromCivil(now.wYear, now.wMonth, now.wDay));
+}
+
+// Neuer Zeitplan wie im Original: der aktuelle und die zwei folgenden Monate; Beispielaktivitäten darin.
+DataItem sampleGantt(const std::wstring& name) {
+    const double m0 = static_cast<double>(unitStart(todayDays(), TimeUnit::Month, 1));
+    DataItem item;
+    item.name = name;
+    item.chartJson = std::format(LR"({{"type":"gantt","start":"{}","end":"{}"}})", isoDate(m0), isoDate(addUnits(m0, TimeUnit::Month, 3) - 1));
     item.table = {
-        {Cell{}, text(L"Start"), text(L"Umsatz"), text(L"Kosten"), text(L"Zwischensumme"), text(L"Sonstiges"), text(L"Ende")},
-        {text(L"Wert"), num(100), num(40), num(-25), text(L"e"), num(-10), text(L"e")},
+        {textCell(L"Aktivität"), textCell(L"Start"), textCell(L"Ende"), textCell(L"Meilenstein"), textCell(L"Verantwortlich"), textCell(L"Bemerkung")},
+        {textCell(L"Meilensteine"), Cell{}, Cell{}, dateCell(m0 + 84)},
+        {textCell(L"Analyse"), dateCell(m0 + 2), dateCell(m0 + 16)},
+        {textCell(L"Konzept"), dateCell(m0 + 14), dateCell(m0 + 35), dateCell(m0 + 34)},
+        {textCell(L"Umsetzung"), dateCell(m0 + 31), dateCell(m0 + 70)},
+        {textCell(L"Test"), dateCell(m0 + 63), dateCell(m0 + 80), dateCell(m0 + 79)},
     };
     return item;
 }
@@ -716,22 +822,35 @@ ComPtr<IDispatch> rethinkElementOf(IDispatch* selection) {
     return nullptr;
 }
 
-std::wstring insertWaterfall(IDispatch* app, bool openSheet) {
+std::wstring insertElement(IDispatch* app, ElementKind kind, Orientation orientation, bool openSheet) {
     auto slide = currentSlide(app);
     auto pageSetup = disp::object(disp::object(activeWindow(app).Get(), L"Presentation").Get(), L"PageSetup");
     const double slideWidth = disp::call(pageSetup.Get(), L"SlideWidth").toDouble();
     const double slideHeight = disp::call(pageSetup.Get(), L"SlideHeight").toDouble();
-    const double width = slideWidth * 0.7, height = slideHeight * 0.6;
+    const bool gantt = kind == ElementKind::Gantt;
+    const double width = slideWidth * (gantt ? 0.84 : 0.7), height = slideHeight * 0.6;
 
-    const std::wstring name = freeName(slide.Get(), L"Wasserfall");
+    const std::wstring name = freeName(slide.Get(), gantt ? L"Gantt" : L"Wasserfall");
     const Box box{emu((slideWidth - width) / 2), emu((slideHeight - height) / 2 + slideHeight * 0.05), emu(width), emu(height)};
-    auto group = renderElement(slide.Get(), nullptr, sampleWaterfall(name), box);
+    const DataItem item = gantt ? sampleGantt(name) : sampleWaterfall(name, kind == ElementKind::WaterfallDown, orientation);
+    auto group = renderElement(slide.Get(), nullptr, item, box);
     try {
         disp::call(group.Get(), L"Select");
     } catch (const Error&) {
     }
     if (openSheet) openDatasheet(app, true);
     return name;
+}
+
+std::wstring insertWaterfall(IDispatch* app, bool openSheet) { return insertElement(app, ElementKind::Waterfall, Orientation::Up, openSheet); }
+
+ElementInfo elementInfo(IDispatch* element) {
+    ElementInfo info;
+    const std::wstring kind = tagValue(element, kKindTag);  // ältere Elemente ohne Tag: Wasserfall nach oben
+    info.gantt = kind == L"gantt";
+    for (int o = 0; o < 4; ++o)
+        if (kind == std::wstring(L"waterfall ") + orientationName(static_cast<Orientation>(o))) info.direction = static_cast<Orientation>(o);
+    return info;
 }
 
 // ---- Eingebautes Datenblatt ----
@@ -840,8 +959,12 @@ void openDatasheet(IDispatch* app, bool show) {
         g_grids.erase(key);
         delete ctx;
     };
+    const std::wstring hint = elementInfo(element.Get()).gantt
+                                  ? L"Zeile 1: Überschriften · Zeile 2: Meilensteinzeile · darunter je Aktivität: Start, Ende (00:00 Uhr), Meilenstein, "
+                                    L"Verantwortlich, Bemerkung · Datum als TT.MM.JJJJ"
+                                  : L"";
     ctx->window = openDatasheetWindow(powerPointFrame(), L"rethink – Datenblatt " + ctx->name, std::move(table), localeDecimalSeparator(),
-                                      std::move(callbacks), screenRectOf(app, element.Get()), show);
+                                      std::move(callbacks), screenRectOf(app, element.Get()), show, hint);
     g_grids[key] = ctx;
 }
 
@@ -1045,7 +1168,6 @@ SegmentDragStart beginSegmentDrag(IDispatch* app, int row, int column) {
     g_drag.reset();
     auto element = selectedElement(app);
     const std::wstring stored = tagValue(element.Get(), kModelTag);
-    const std::wstring separator = localeDecimalSeparator();
 
     SegmentDrag drag;
     drag.slide = disp::object(element.Get(), L"Parent");
@@ -1054,10 +1176,9 @@ SegmentDragStart beginSegmentDrag(IDispatch* app, int row, int column) {
     drag.box = layoutBox(element.Get());
     std::tie(drag.item, drag.options) = onWorker([&] {
         DataItem item = parseDataItemJson(stored);
-        ChartOptions options = parseChartOptions(item.chartJson);
+        ChartOptions options = optionsOf(item);
         return std::pair{std::move(item), std::move(options)};
     });
-    drag.options.decimalSeparator = separator;
     const Cell& cell = valueCell(drag.item, row, column);
 
     SegmentDragStart start;
@@ -1122,6 +1243,546 @@ void endSegmentDrag() {
     if (Sheet* s = openExcelSheet(drag.group.Get())) writeExcelCell(*s, drag.row, drag.column, item.table[drag.row][drag.column]);
 }
 
+// ---- Zeitplan (Gantt) ----
+
+namespace {
+
+using GanttChange = std::function<void(DataItem&, ChartOptions&)>;
+
+ComPtr<IDispatch> selectedGantt(IDispatch* app) {
+    auto element = selectedElement(app);
+    if (!elementInfo(element.Get()).gantt) throw Error("Bitte einen rethink-Zeitplan auswählen.");
+    return element;
+}
+
+// Ganze Tabelle in das offene Excel-Datenblatt schreiben (Datumsangaben als Excel-Datum).
+void writeExcelTable(Sheet& s, const std::vector<Row>& table) {
+    auto sheet = disp::object(disp::object(s.workbook.Get(), L"Worksheets").Get(), L"Item", 1L);
+    disp::call(disp::object(sheet.Get(), L"UsedRange").Get(), L"ClearContents");
+    for (size_t r = 0; r < table.size(); ++r)
+        for (size_t c = 0; c < table[r].size(); ++c) {
+            const Cell& cell = table[r][c];
+            if (cell.kind == CellKind::Empty) continue;
+            auto range = disp::object(sheet.Get(), L"Range", columnName(c) + std::to_wstring(r + 1));
+            switch (cell.kind) {
+                case CellKind::Number: disp::put(range.Get(), L"Value2", cell.number); break;
+                case CellKind::Percentage: disp::put(range.Get(), L"Value2", cell.number / 100.0); break;
+                case CellKind::String: disp::put(range.Get(), L"Value2", cell.text); break;
+                case CellKind::Date:
+                    if (const auto t = cellDate(cell)) {
+                        disp::put(range.Get(), L"NumberFormat", std::wstring(L"dd.mm.yyyy"));
+                        disp::put(range.Get(), L"Value2", *t + 25569.0);  // Excel zählt ab 30.12.1899
+                    }
+                    break;
+                case CellKind::Empty: break;
+            }
+        }
+}
+
+void syncDatasheets(IDispatch* group, const std::vector<Row>& table) {
+    if (GridContext* g = gridFor(group)) datasheetSetTable(g->window, table);
+    if (Sheet* s = openExcelSheet(group)) {
+        try {
+            writeExcelTable(*s, table);
+        } catch (const std::exception&) {
+            // Excel beschäftigt: das Diagramm stimmt, das Datenblatt holt beim nächsten Öffnen auf
+        }
+    }
+}
+
+// Änderungen über Zeilen, Elemente und Optionen: Modell lesen, ändern, zurückschreiben, an Ort und Stelle zeichnen.
+ComPtr<IDispatch> modifyGantt(IDispatch* app, IDispatch* element, const GanttChange& change) {
+    auto slide = disp::object(element, L"Parent");
+    const std::wstring stored = tagValue(element, kModelTag);
+    const DataItem item = onWorker([&] {
+        DataItem parsed = parseDataItemJson(stored);
+        ChartOptions options = optionsOf(parsed);
+        try {
+            change(parsed, options);
+        } catch (const std::invalid_argument& e) {
+            throw Error(e.what());
+        }
+        parsed.chartJson = mergeChartJson(parsed.chartJson, ganttEditsJson(options.gantt));
+        return parsed;
+    });
+    try {
+        disp::call(app, L"StartNewUndoEntry");
+    } catch (const std::exception&) {
+    }
+    auto group = renderElement(slide.Get(), element, item, layoutBox(element));
+    syncDatasheets(group.Get(), item.table);
+    return group;
+}
+
+struct GanttModel {
+    DataItem item;
+    ChartOptions options;
+    Drawing drawing;
+};
+
+GanttModel ganttModel(IDispatch* element) {
+    const std::wstring stored = tagValue(element, kModelTag);
+    GanttModel m;
+    std::tie(m.item, m.options) = onWorker([&] {
+        DataItem item = parseDataItemJson(stored);
+        ChartOptions options = optionsOf(item);
+        return std::pair{std::move(item), std::move(options)};
+    });
+    m.drawing = layoutOrThrow(m.item, m.options, layoutBox(element));
+    return m;
+}
+
+bool draggable(const std::string& flags) { return flags == "bar" || flags == "milestone" || flags == "bracket" || flags == "shade"; }
+
+GanttGeometry geometryOfDrawing(const Drawing& d) {
+    GanttGeometry g;
+    g.valid = d.axis.valid;
+    for (auto& p : d.prims) {
+        if (!draggable(p.flags)) continue;
+        GanttShape s;
+        s.role = p.role, s.flags = p.flags;
+        s.left = pt(std::min(p.x, p.x + p.w)), s.top = pt(std::min(p.y, p.y + p.h)), s.width = pt(std::abs(p.w)), s.height = pt(std::abs(p.h));
+        g.shapes.push_back(s);
+    }
+    g.plotLeft = pt(d.axis.x0), g.plotRight = pt(d.axis.x0 + d.axis.w), g.scaleTop = pt(d.scaleTop), g.scaleBottom = pt(d.scaleBottom);
+    return g;
+}
+
+std::wstring datesText(const GanttTarget& t) {
+    if (t.kind == GanttTarget::Kind::Milestone) return formatDate(t.start, L"ddd dd.MM.yyyy", L"de");
+    return formatDate(t.start, L"dd.MM.", L"de") + L"–" + formatDate(std::ceil(t.end - 1e-9) - 1, L"dd.MM.yyyy", L"de");
+}
+
+// Zustand eines Ziehens am Zeitplan; wie beim Wasserfall wird nur das Layout neu gerechnet und nur Geändertes angefasst.
+struct GanttDrag {
+    ComPtr<IDispatch> app, slide, group;
+    DataItem item0, item;
+    ChartOptions options0, options;
+    Box box;
+    Drawing last;
+    RoleMap byRole;
+    bool range = false;
+    GanttTarget target;
+    GanttGrip grip = GanttGrip::Move;
+    TimeUnit unit = TimeUnit::Day;
+    double first = 0, second = 0;  // aktueller Stand (Bereich: t0/t1, sonst Start/Ende)
+    bool changed = false;
+    std::wstring autoStart, autoEnd;  // gespeicherter Bereich (leer = folgt den Daten), nach dem Ziehen wiederhergestellt
+};
+std::optional<GanttDrag> g_ganttDrag;
+
+std::wstring dragTooltip(const GanttDrag& g) {
+    const std::wstring& lang = g.options.language;
+    if (g.range) return ganttTooltip(g.grip == GanttGrip::Start ? g.first : g.second - 1, lang);
+    if (g.target.kind == GanttTarget::Kind::Milestone) return ganttTooltip(g.first, lang);
+    switch (g.grip) {
+        case GanttGrip::Start: return ganttTooltip(g.first, lang);
+        case GanttGrip::End: return ganttTooltip(std::ceil(g.second - 1e-9) - 1, lang);  // letzter eingeschlossener Tag
+        case GanttGrip::Move: {
+            GanttTarget t = g.target;
+            t.start = g.first, t.end = g.second;
+            return datesText(t);
+        }
+    }
+    return {};
+}
+
+}  // namespace
+
+GanttGeometry ganttGeometryOf(IDispatch* element) {
+    GanttGeometry g;
+    auto items = disp::object(element, L"GroupItems");
+    const long count = disp::call(items.Get(), L"Count").toLong();
+    bool haveStart = false, haveEnd = false;
+    for (long i = 1; i <= count; ++i) {
+        auto shape = disp::object(items.Get(), L"Item", i);
+        const std::wstring name = disp::call(shape.Get(), L"Name").str();
+        if (name == L"scale start" || name == L"scale end") {
+            const Rect r = rectOf(shape.Get());
+            (name == L"scale start" ? g.plotLeft : g.plotRight) = r.left;
+            g.scaleTop = r.top, g.scaleBottom = r.top + r.height;
+            (name == L"scale start" ? haveStart : haveEnd) = true;
+            continue;
+        }
+        const std::string flags = narrow(tagValue(shape.Get(), kSegmentTag));
+        if (!draggable(flags)) continue;
+        const Rect r = rectOf(shape.Get());
+        g.shapes.push_back({narrow(name), flags, r.left, r.top, r.width, r.height});
+    }
+    g.valid = haveStart && haveEnd;
+    return g;
+}
+
+std::wstring beginGanttDrag(IDispatch* app, const std::string& role, int grip, double pointsPerPixel) {
+    g_ganttDrag.reset();
+    auto element = selectedGantt(app);
+    GanttModel m = ganttModel(element.Get());
+    GanttDrag drag;
+    drag.app = app;
+    drag.slide = disp::object(element.Get(), L"Parent");
+    drag.group = element;
+    drag.box = layoutBox(element.Get());
+    drag.grip = static_cast<GanttGrip>(std::clamp(grip, 0, 2));
+    drag.unit = m.drawing.axis.snapUnit(3 * std::max(pointsPerPixel, 0.01) * kEmuPerPt);
+    if (role == "range") {
+        drag.range = true;
+        if (drag.grip == GanttGrip::Move) drag.grip = GanttGrip::End;
+        drag.first = m.drawing.axis.t0, drag.second = m.drawing.axis.t1;
+        drag.unit = m.drawing.scales.empty() ? TimeUnit::Day : m.drawing.scales.back();  // Schritte der feinsten Skala
+    } else {
+        drag.target = ganttTarget(m.item, m.options, role);
+        if (drag.target.kind == GanttTarget::Kind::None) throw Error("Dieses Element lässt sich nicht ziehen.");
+        if (drag.target.kind == GanttTarget::Kind::Milestone) drag.grip = GanttGrip::Move;
+        drag.first = drag.target.start, drag.second = drag.target.end;
+        auto byRole = shapesByRole(element.Get(), m.drawing);
+        if (!byRole) {  // Formen passen nicht mehr zum Modell: einmal vollständig neu zeichnen
+            drag.group = renderElement(drag.slide.Get(), element, m.item, drag.box);
+            byRole = shapesByRole(drag.group.Get(), m.drawing);
+            if (!byRole) throw Error("Der Zeitplan lässt sich nicht ziehen. Bitte das Datenblatt verwenden.");
+        }
+        drag.byRole = std::move(*byRole);
+    }
+    drag.item0 = drag.item = m.item;
+    drag.options0 = drag.options = m.options;
+    // Während des Ziehens bleibt der sichtbare Bereich fest, auch wenn er sonst den Daten folgt
+    drag.autoStart = m.options.gantt.start, drag.autoEnd = m.options.gantt.end;
+    if (!drag.range) setGanttRange(drag.options0, m.drawing.axis.t0, m.drawing.axis.t1);
+    drag.last = std::move(m.drawing);
+    try {
+        disp::call(app, L"StartNewUndoEntry");
+    } catch (const std::exception&) {
+    }
+    const std::wstring tooltip = dragTooltip(drag);
+    g_ganttDrag = std::move(drag);
+    return tooltip;
+}
+
+bool ganttDragTo(double dx, GanttGeometry& geometry, std::wstring& tooltip) {
+    if (!g_ganttDrag) return false;
+    GanttDrag& g = *g_ganttDrag;
+    const double dxEmu = dx * kEmuPerPt;
+    if (g.range) {
+        const auto [t0, t1] = ganttRangeDrag(g.last.axis, g.grip == GanttGrip::Start, dxEmu, g.unit);
+        if (t0 == g.first && t1 == g.second) return false;
+        g.first = t0, g.second = t1, g.changed = true;
+        tooltip = dragTooltip(g);
+        return true;  // gezeichnet wird erst beim Loslassen (die Skalen ändern sich vollständig)
+    }
+    const auto [s, e] = ganttDragDates(g.last.axis, g.target, g.grip, dxEmu, g.unit);
+    if (s == g.first && e == g.second) return false;
+    g.first = s, g.second = e, g.changed = true;
+    g.item = g.item0;
+    g.options = g.options0;
+    engine::setGanttDates(g.item, g.options, g.target, s, e);
+    Drawing d = layoutOrThrow(g.item, g.options, g.box);
+    // Die Zeitachse bleibt beim Ziehen fest: neue Rollen (z. B. Pfeil am Bereichsende) erzwingen ein volles Zeichnen
+    if (!sameRoles(d, g.last)) {
+        g.group = renderElement(g.slide.Get(), g.group, g.item, g.box);
+        auto byRole = shapesByRole(g.group.Get(), d);
+        if (!byRole) throw Error("Der Zeitplan lässt sich nicht weiter ziehen.");
+        g.byRole = std::move(*byRole);
+    } else {
+        for (size_t i = 0; i < d.prims.size(); ++i)
+            if (!samePrim(d.prims[i], g.last.prims[i])) updateShape(g.byRole[widen(d.prims[i].role)].Get(), d.prims[i]);
+    }
+    const GanttAxis axis = g.last.axis;  // Maßstab des Ziehens bleibt der vom Anfang
+    g.last = std::move(d);
+    g.last.axis = axis;
+    geometry = geometryOfDrawing(g.last);
+    tooltip = dragTooltip(g);
+    return true;
+}
+
+void endGanttDrag(bool cancel) {
+    if (!g_ganttDrag) return;
+    GanttDrag g = std::move(*g_ganttDrag);
+    g_ganttDrag.reset();
+    if (!g.changed) return;
+    if (g.range) {
+        if (cancel) return;
+        const double t0 = g.first, t1 = g.second;
+        modifyGantt(g.app.Get(), g.group.Get(), [&](DataItem&, ChartOptions& o) { setGanttRange(o, t0, t1); });
+        return;
+    }
+    if (cancel) {  // Ausgangsstand wiederherstellen
+        renderElement(g.slide.Get(), g.group, g.item0, g.box);
+        return;
+    }
+    ChartOptions options = g.options;
+    options.gantt.start = g.autoStart, options.gantt.end = g.autoEnd;
+    DataItem item = g.item;
+    item.chartJson = onWorker([&] { return mergeChartJson(item.chartJson, ganttEditsJson(options.gantt)); });
+    if (g.autoStart.empty() || g.autoEnd.empty()) {
+        renderElement(g.slide.Get(), g.group, item, g.box);  // Bereich folgt den Daten: einmal mit neuem Bereich zeichnen
+    } else {
+        setTag(g.group.Get(), kModelTag, onWorker([&] { return serializeDataItem(item); }));
+        storeLayout(g.group.Get(), g.box);
+    }
+    syncDatasheets(g.group.Get(), item.table);
+}
+
+GanttHit ganttHitAt(IDispatch* element, double x, double y) {
+    GanttHit hit;
+    if (!elementInfo(element).gantt) return hit;
+    const GanttModel m = ganttModel(element);
+    const Drawing& d = m.drawing;
+    const Emu ex = emu(x), ey = emu(y);
+    hit.valid = true;
+    for (auto& band : d.rows)
+        if (ey >= band.y && ey < band.y + band.h) hit.row = band.row;
+    if (ex >= d.axis.x0 && ex <= d.axis.x0 + d.axis.w) {
+        hit.date = d.axis.dateAt(static_cast<double>(ex));
+        hit.hasDate = true;
+    }
+    hit.inScale = hit.hasDate && ey >= d.scaleTop && ey < d.scaleBottom;
+    const Emu tolerance = emu(3);
+    for (auto it = d.prims.rbegin(); it != d.prims.rend(); ++it) {  // oberste Form zuerst
+        if (!draggable(it->flags)) continue;
+        const Emu x0 = std::min(it->x, it->x + it->w) - tolerance, x1 = std::max(it->x, it->x + it->w) + tolerance;
+        const Emu y0 = std::min(it->y, it->y + it->h) - tolerance, y1 = std::max(it->y, it->y + it->h) + tolerance;
+        if (ex >= x0 && ex <= x1 && ey >= y0 && ey <= y1) {
+            hit.role = it->role;
+            break;
+        }
+    }
+    return hit;
+}
+
+namespace {
+
+int requireRow(const GanttHit& hit) {
+    if (hit.row < gantt::kFirstActivityRow) throw Error("Bitte mit der rechten Maustaste auf eine Zeile des Zeitplans klicken.");
+    return hit.row;
+}
+
+double requireDate(const GanttHit& hit) {
+    if (!hit.hasDate) throw Error("Bitte mit der rechten Maustaste im Zeitbereich des Zeitplans klicken.");
+    return hit.date;
+}
+
+// Dauer neuer Balken: eine Einheit der feinsten Skala, mindestens eine Woche
+double newBarDays(IDispatch* element) {
+    const Drawing d = ganttModel(element).drawing;
+    const TimeUnit unit = d.scales.empty() ? TimeUnit::Week : d.scales.back();
+    return std::max(7.0, std::round(unitDays(unit)));
+}
+
+void addItem(IDispatch* app, IDispatch* element, GanttItem::Kind kind, const GanttHit& hit) {
+    const double date = requireDate(hit);
+    const double days = newBarDays(element);
+    int row = hit.row;
+    if (kind == GanttItem::Kind::Bar || kind == GanttItem::Kind::Pentagon || kind == GanttItem::Kind::Chevron) row = requireRow(hit);
+    if (row < 0) row = gantt::kMilestoneRow;  // Meilensteine und Klammern unter dem Diagramm
+    modifyGantt(app, element, [&](DataItem& item, ChartOptions& o) {
+        addGanttItem(item, o, kind, row, date, kind == GanttItem::Kind::Shade ? 7 : days);
+        if (kind == GanttItem::Kind::Pentagon || kind == GanttItem::Kind::Chevron) o.gantt.items.back().text = L"Phase";
+    });
+}
+
+}  // namespace
+
+void ganttCommand(IDispatch* app, const std::wstring& id, const GanttHit& hit) {
+    auto element = selectedGantt(app);
+    IDispatch* e = element.Get();
+    if (id == L"rtkG_insertRow") {
+        const int before = hit.row >= gantt::kFirstActivityRow ? hit.row + 1 : std::numeric_limits<int>::max();
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { insertGanttRow(item, o, before, L"Neue Aktivität"); });
+    } else if (id == L"rtkG_duplicateRow") {
+        const int row = requireRow(hit);
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { duplicateGanttRow(item, o, row, false); });
+    } else if (id == L"rtkG_deleteRow") {
+        const int row = requireRow(hit);
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { deleteGanttRow(item, o, row); });
+    } else if (id == L"rtkG_rowUp" || id == L"rtkG_rowDown") {
+        const int row = requireRow(hit);
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) {
+            if (!moveGanttRow(item, o, row, id == L"rtkG_rowUp" ? -1 : 1)) throw std::invalid_argument("Die Zeile steht schon am Rand.");
+        });
+    } else if (id == L"rtkG_newBar") {
+        addItem(app, e, GanttItem::Kind::Bar, hit);
+    } else if (id == L"rtkG_newMilestone") {
+        addItem(app, e, GanttItem::Kind::Milestone, hit);
+    } else if (id == L"rtkG_newBracket") {
+        addItem(app, e, GanttItem::Kind::Bracket, hit);
+    } else if (id == L"rtkG_newShade") {
+        addItem(app, e, GanttItem::Kind::Shade, hit);
+    } else if (id == L"rtkG_newPentagon") {
+        addItem(app, e, GanttItem::Kind::Pentagon, hit);
+    } else if (id == L"rtkG_newChevron") {
+        addItem(app, e, GanttItem::Kind::Chevron, hit);
+    } else if (id == L"rtkG_deleteItem") {
+        if (hit.role.empty()) throw Error("Bitte mit der rechten Maustaste auf einen Balken, Meilenstein, eine Klammer oder Schattierung klicken.");
+        const std::string role = hit.role;
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { deleteGanttTarget(item, o, ganttTarget(item, o, role)); });
+    } else if (id == L"rtkG_fit") {
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) {
+            if (!fitGanttRange(item, o)) throw std::invalid_argument("Der Zeitplan enthält noch keine Daten.");
+        });
+    } else if (id == L"rtkG_autoScales") {
+        modifyGantt(app, e, [&](DataItem&, ChartOptions& o) { o.gantt.scales.clear(); });
+    } else if (id == L"rtkG_calendar") {
+        openGanttCalendar(app, hit.inScale ? std::string() : hit.role);
+    } else if (id == L"rtkG_datasheet") {
+        openDatasheet(app, true);
+    } else {
+        throw Error("Unbekannter Befehl: " + narrow(id));
+    }
+}
+
+namespace {
+
+std::optional<TimeUnit> scaleOfToggle(const std::wstring& id) {
+    static const std::pair<const wchar_t*, TimeUnit> kScales[] = {{L"rtkT_scaleYear", TimeUnit::Year},
+                                                                   {L"rtkT_scaleQuarter", TimeUnit::Quarter},
+                                                                   {L"rtkT_scaleMonth", TimeUnit::Month},
+                                                                   {L"rtkT_scaleWeek", TimeUnit::Week},
+                                                                   {L"rtkT_scaleDay", TimeUnit::Day}};
+    for (auto& [name, unit] : kScales)
+        if (id == name) return unit;
+    return std::nullopt;
+}
+
+}  // namespace
+
+bool ganttPressed(IDispatch* app, const std::wstring& id, const GanttHit& hit) {
+    auto element = selectedGantt(app);
+    const GanttModel m = ganttModel(element.Get());
+    const GanttOptions& g = m.options.gantt;
+    if (const auto unit = scaleOfToggle(id)) return std::find(m.drawing.scales.begin(), m.drawing.scales.end(), *unit) != m.drawing.scales.end();
+    if (id == L"rtkT_weekendsShaded") return g.weekends == WeekendMode::Shaded;
+    if (id == L"rtkT_weekendsHidden") return g.weekends == WeekendMode::Hidden;
+    if (id == L"rtkT_separators") return g.separators;
+    if (id == L"rtkT_barLabels") return g.barLabels != BarLabel::None;
+    if (id == L"rtkT_milestoneLabels") return g.milestoneLabels;
+    if (id == L"rtkT_milestoneLines") return g.milestoneLines;
+    if (id == L"rtkT_rowSeparators") return g.rowSeparators;
+    if (id == L"rtkT_headlines") return g.headlines;
+    if (id == L"rtkT_today") return g.todayLine;
+    if (id == L"rtkT_rowShade") return std::find(g.shadedRows.begin(), g.shadedRows.end(), hit.row) != g.shadedRows.end();
+    // Beschriftungsspalten: sichtbar, wenn eine Überschrift dafür gezeichnet ist
+    auto shown = [&](const char* role) {
+        return std::any_of(m.drawing.prims.begin(), m.drawing.prims.end(), [&](const Prim& p) { return p.role == role; });
+    };
+    if (id == L"rtkT_responsible") return shown("headline responsible");
+    if (id == L"rtkT_remark") return shown("headline remark");
+    return false;
+}
+
+void ganttToggle(IDispatch* app, const std::wstring& id, bool pressed, const GanttHit& hit) {
+    auto element = selectedGantt(app);
+    std::vector<TimeUnit> shown;
+    if (scaleOfToggle(id)) shown = ganttModel(element.Get()).drawing.scales;
+    modifyGantt(app, element.Get(), [&](DataItem&, ChartOptions& o) {
+        GanttOptions& g = o.gantt;
+        if (const auto unit = scaleOfToggle(id)) {
+            // Skalen von Hand: die automatische Wahl ist danach aus (wie im Original)
+            if (g.scales.empty()) g.scales = shown;
+            auto it = std::find(g.scales.begin(), g.scales.end(), *unit);
+            if (pressed && it == g.scales.end()) g.scales.push_back(*unit);
+            if (!pressed && it != g.scales.end()) g.scales.erase(it);
+            if (g.scales.empty()) throw std::invalid_argument("Mindestens eine Skala muss sichtbar bleiben.");
+        } else if (id == L"rtkT_weekendsShaded") {
+            g.weekends = pressed ? WeekendMode::Shaded : WeekendMode::Plain;
+        } else if (id == L"rtkT_weekendsHidden") {
+            g.weekends = pressed ? WeekendMode::Hidden : WeekendMode::Shaded;
+        } else if (id == L"rtkT_separators") {
+            g.separators = pressed;
+        } else if (id == L"rtkT_barLabels") {
+            g.barLabels = pressed ? BarLabel::Range : BarLabel::None;
+        } else if (id == L"rtkT_milestoneLabels") {
+            g.milestoneLabels = pressed;
+        } else if (id == L"rtkT_milestoneLines") {
+            g.milestoneLines = pressed;
+        } else if (id == L"rtkT_rowSeparators") {
+            g.rowSeparators = pressed;
+        } else if (id == L"rtkT_headlines") {
+            g.headlines = pressed;
+        } else if (id == L"rtkT_today") {
+            g.todayLine = pressed;
+            g.today.clear();
+        } else if (id == L"rtkT_responsible") {
+            g.responsible = pressed;
+        } else if (id == L"rtkT_remark") {
+            g.remark = pressed;
+        } else if (id == L"rtkT_rowShade") {
+            if (hit.row < gantt::kFirstActivityRow) throw std::invalid_argument("Bitte mit der rechten Maustaste auf eine Zeile klicken.");
+            auto& rows = g.shadedRows;
+            rows.erase(std::remove(rows.begin(), rows.end(), hit.row), rows.end());
+            if (pressed) rows.push_back(hit.row);
+        } else {
+            throw std::invalid_argument("Unbekannter Schalter");
+        }
+    });
+}
+
+void setGanttDates(IDispatch* app, const std::string& role, const std::wstring& first, const std::wstring& last) {
+    auto element = selectedGantt(app);
+    const auto a = parseIsoDate(first), b = parseIsoDate(last.empty() ? first : last);
+    if (!a || !b || *b < *a) throw Error("Datum als ISO angeben, z. B. 2026-11-02 (Ende nicht vor dem Anfang)");
+    modifyGantt(app, element.Get(), [&](DataItem& item, ChartOptions& o) {
+        if (role.empty() || role == "range") {
+            setGanttRange(o, *a, *b + 1);
+            return;
+        }
+        const GanttTarget t = ganttTarget(item, o, role);
+        if (t.kind == GanttTarget::Kind::None) throw std::invalid_argument("Dieses Element gibt es nicht.");
+        engine::setGanttDates(item, o, t, *a, t.kind == GanttTarget::Kind::Milestone ? *a : *b + 1);
+    });
+}
+
+void openGanttCalendar(IDispatch* app, const std::string& role) {
+    auto element = selectedGantt(app);
+    const GanttModel m = ganttModel(element.Get());
+    double first = m.drawing.axis.t0, last = m.drawing.axis.t1 - 1;
+    bool single = false;
+    std::wstring title = L"rethink – Datumsbereich";
+    if (!role.empty() && role != "range") {
+        const GanttTarget t = ganttTarget(m.item, m.options, role);
+        if (t.kind == GanttTarget::Kind::None) throw Error("Dieses Element hat keine Daten.");
+        single = t.kind == GanttTarget::Kind::Milestone;
+        first = std::floor(t.start);
+        last = single ? first : std::ceil(t.end - 1e-9) - 1;
+        title = single ? L"rethink – Meilenstein" : L"rethink – Zeitraum";
+    }
+    ComPtr<IDispatch> appRef = app;
+    const long slideId = disp::call(disp::object(element.Get(), L"Parent").Get(), L"SlideID").toLong();
+    const std::wstring name = disp::call(element.Get(), L"Name").str();
+    CalendarCallbacks callbacks;
+    callbacks.changed = [appRef, role, slideId, name](double a, double b) {
+        try {
+            // Das Element über Folie und Namen wiederfinden: nach einem vollständigen Neuzeichnen ist es eine neue Form
+            auto slide = disp::object(disp::object(disp::object(appRef.Get(), L"ActivePresentation").Get(), L"Slides").Get(), L"FindBySlideID", slideId);
+            auto group = disp::object(disp::object(slide.Get(), L"Shapes").Get(), L"Item", name);
+            disp::call(group.Get(), L"Select");
+            setGanttDates(appRef.Get(), role, isoDate(a), isoDate(b));
+        } catch (const std::exception& e) {
+            MessageBoxW(nullptr, widen(e.what()).c_str(), kTitle, MB_ICONWARNING);
+        }
+    };
+    openCalendarWindow(powerPointFrame(), title, first, last, single, std::move(callbacks), screenRectOf(app, element.Get()));
+}
+
+std::wstring ganttTargets(IDispatch* app) {
+    auto element = selectedGantt(app);
+    const GanttModel m = ganttModel(element.Get());
+    std::wstring text = std::format(L"range={}..{}", isoDate(m.drawing.axis.t0), isoDate(m.drawing.axis.t1 - 1));
+    std::wstring scales;
+    for (auto u : m.drawing.scales) scales += (scales.empty() ? L"" : L",") + unitName(u, L"en");
+    text += L"; scales=" + scales;
+    for (auto& p : m.drawing.prims) {
+        if (!draggable(p.flags)) continue;
+        const GanttTarget t = ganttTarget(m.item, m.options, p.role);
+        if (t.kind == GanttTarget::Kind::None) continue;
+        text += std::format(L"; {}={}", widen(p.role), isoDate(t.start));
+        if (t.kind != GanttTarget::Kind::Milestone) text += L".." + isoDate(t.end);
+    }
+    return text;
+}
+
+void selectInnerShape(IDispatch* element, const std::string& role) {
+    disp::call(disp::object(disp::object(element, L"GroupItems").Get(), L"Item", widen(role)).Get(), L"Select");
+}
+
 std::vector<SegmentInfo> segmentsOf(IDispatch* element) {
     std::vector<SegmentInfo> result;
     auto items = disp::object(element, L"GroupItems");
@@ -1173,9 +1834,11 @@ void stopDatasheetWatch() {
     quitExcelIfUnused();
 }
 
-void commandInsertWaterfall(IDispatch* app) {
+void commandInsertWaterfall(IDispatch* app) { commandInsertElement(app, ElementKind::Waterfall, Orientation::Up); }
+
+void commandInsertElement(IDispatch* app, ElementKind kind, Orientation orientation) {
     try {
-        insertWaterfall(app, false);  // Datenblatt erst auf Wunsch (Symbol unten rechts, Doppelklick)
+        insertElement(app, kind, orientation, false);  // Datenblatt erst auf Wunsch (Symbol unten rechts, Doppelklick)
     } catch (const std::exception& e) {
         MessageBoxW(nullptr, widen(e.what()).c_str(), kTitle, MB_ICONERROR);
     } catch (const winrt::hresult_error& e) {

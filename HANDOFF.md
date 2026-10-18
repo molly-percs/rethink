@@ -2,65 +2,92 @@
 
 This file is for anyone picking up development. It describes the current state, how the pieces fit together and what to do next. Keep it updated with every push.
 
-## Current state (2026-10-17)
+## Current state (2026-10-18)
 
-- **Working and tested:** waterfall chart (build-up) with `e` totals and data table; CLI `.ppttc` filling; add-in with ribbon tab, insert waterfall, selection overlay (glow, ▲▼ step handles, table icon), built-in datasheet with live updates, optional Excel datasheet, in-place updates, relayout on resize.
-- **Implemented, not yet compiled with MSVC or run in PowerPoint** (written in a Linux container: engine unit tests pass with g++, the add-in files pass a mingw-w64 syntax check with stubbed WRL/WinRT/MSXML headers; nothing else). First thing on Windows: build, run `engine_test`, `addin_selftest`, `tests\waterfall-addin-test.ps1` (new section 3b), then check by hand:
-  - **Dragging the ▲▼ handles.** `addin/overlay.cpp` captures the mouse on a ▲▼ press; release without moving (< `SM_CYDRAG`) is a click, otherwise `Drag` gestures are posted, coalesced to the newest mouse position (this is the throttling: one render per message-loop turn), then exactly one `DragEnd` (button up) or `DragCancel` (Esc, capture lost). `addin/events.cpp` (`dragGesture`) freezes value, step (`stepDecimals`) and scale at the start: pixels per unit = `emuPerUnit(drawing)` (engine) × PowerPoint's points-to-pixels factor; all-zero charts fall back to 4 px per step. `addin/elements.cpp`: `beginSegmentDrag` freezes model, options and layout box and calls `Application.StartNewUndoEntry`; `dragSegmentTo` re-runs only the pure layout (no worker thread) and updates only prims that differ from the last drawing (`samePrim`), returning the new segment rectangles so the overlay is rebuilt without querying shapes; `endSegmentDrag` writes `RETHINK_MODEL`/`RETHINK_LAYOUT` once and syncs an open built-in datasheet and Excel cell. Errors during the drag are reported after the mouse is released. Automation: `DragSegment(row, column, "6;15;30")` runs the same `dragGesture` path and returns the frozen scale.
-  - **▲▼ click step** now uses `stepDecimals` of the clicked value (45 → 46 even if another value has decimals).
-  - **Glow follows the chart while PowerPoint moves it:** thread-local `WH_MOUSE` hook installed in `startEvents`. Press inside the element → after the drag threshold the overlay window is offset by the cursor delta (`offsetOverlay`); press on one of PowerPoint's 8 size grips or the rotation grip → overlay hidden until release. While the button is down the 150 ms tracking timer leaves the overlay alone; after release `placeOverlay` re-shows it because `overlayDisplaced()` is true.
-  - Deviation from the earlier plan: the segment value is **not** stored in the `RETHINK_SEG` tag; the drag scale comes from the engine drawing at drag start, so the tag stays `pos`/`neg`/`e`.
-- **Requested next:** insert menu like the original (popup gallery of all chart types; arrows around each icon pick the orientation; unimplemented types greyed out), build-down waterfall, chart orientation (up/down/left/right as an engine transform), then a Gantt chart slice.
+Built and tested on Windows 11 ARM64 (Surface, Snapdragon) with x64 PowerPoint (Microsoft 365, English UI) and Visual Studio Build Tools 2026 (MSVC 14.50), x64 target.
 
-See [docs/charting-ledger.md](docs/charting-ledger.md) for the full feature status.
+- **Waterfall – done:** build-up and build-down (the flipped icon of the original: `e` in the first column, computed backwards), four orientations (`"orientation": "up" | "down" | "right" | "left"`, from the insert gallery arrows), data table (below the chart, or as columns beside horizontal bars), `e` totals, connectors. Add-in: ▲▼ (◀▶ when horizontal) click and drag with frozen scale, one undo entry per drag, built-in and Excel datasheet, in-place updates, relayout on resize. Verified end to end in PowerPoint (`tests\waterfall-addin-test.ps1`, 44 checks).
+- **Gantt / timeline – done (slice 4):** see "Gantt in one page" below. Verified with 172 engine checks, the CLI (`tests\gantt.ppttc`), 42 PowerPoint automation checks (`tests\gantt-addin-test.ps1`) and real mouse input (`tests\gantt-mouse-test.ps1`: grip drag, body drag, click selects the bar).
+- **Insert gallery:** ribbon *Diagramm einfügen* opens a popup of all chart types (own GDI icons); unimplemented types are greyed out; arrows around orientable icons pick the orientation. Quick buttons *Wasserfall* and *Gantt / Zeitplan*.
+- **Glow follows the chart while PowerPoint moves it** (mouse hook): implemented in the previous commit, still only checked by reading the code – check by hand.
+- **Ribbon:** PowerPoint accepts the XML (`tests\ribbon-check.ps1` checks `onLoad` and screenshots the tab). On narrow windows with many add-in tabs PowerPoint hides the *rethink* tab label at the right end of the tab row – widen the window.
+
+## Gantt in one page
+
+Behaviour follows the public user manual of the original (chapter "Gantt chart"); nothing else was used.
+
+- **Datasheet** (`table`): row 0 = column headings (Aktivität, Start, Ende, Meilenstein, Verantwortlich, Bemerkung – the headings of the label columns appear in the chart), row 1 = milestone row below the chart, from row 2 one activity per row. A date without time is 00:00, so an end date of the 20th does **not** include the 20th (as documented for the original). Cell colours colour the bar (start cell) or milestone (milestone cell).
+- **Free items** (`chart.items`): `bar`, `pentagon`, `chevron` (with `text`), `milestone`, `bracket`, `shade` – each with `row`, `start`, `end`, optional `text`, `fill`. Rows are `table` indices; inserting/deleting/moving rows through rethink moves the items along.
+- **Scales:** year, quarter, month, week, day; automatic (finest unit whose labels fit + its parent) or fixed (`scales`), formats per scale (`formats`) using the documented date codes (`d dd ddd dddd ddddd w ww www wwww M MM MMM MMMM MMMMM Q QQ QQQ yy yyyy`, `"text"`, `\x`, `'`, `¶`). Separators: solid for the coarsest shown scale, dashed for finer ones. Weekends plain/shaded/hidden (hidden = no width on the axis), weekend days and week start configurable. Default range of a new chart: current month + the next two; without a stored range it follows the data (whole months).
+- **Layout:** label columns (Activity always, Responsible/Remark when they have entries or are switched on), bold headlines at the height of the finest scale, bars with arrows where they leave the range, milestones (diamond) mid-day when the day scale is shown, otherwise at the start of the day, labels placed automatically without overlapping anything in the row, milestone row with its own rule, brackets at the top of a row, shades behind everything with their caption below the chart, optional row shades, row separators, milestone lines, today line (`today`, rethink extension).
+- **Add-in interaction:** select the chart → blue glow with grips at both ends of every bar/bracket/shade and invisible move areas on bars and milestones; dragging snaps to days (to weeks/months when days are narrower than ~3 px) and shows a tooltip *Mi 05.11.2026 · KW 45*; the visible range stays fixed while dragging; one undo entry per drag; Esc cancels. Click on a bar/milestone selects it inside the group (for formatting). Arrows at both scale ends drag the range in units of the finest scale (applied on release). Double-click on a scale → calendar for the range; on an item → its calendar (milestones close after one pick); elsewhere → datasheet. Right-click → *rethink-Zeitplan*: insert/duplicate/delete/move row, shade row, new bar/milestone/bracket/shade/pentagon/chevron at the mouse position (into the datasheet when the row has none yet), delete item, calendar, fit scale to data, scales (year … day, automatic), display toggles (weekends shaded/hidden, separators, dates on bars/milestones, milestone lines, today line, row separators, headlines, Responsible/Remark columns), datasheet.
+- **Code:** `src/engine/dates.*` (calendar maths, formats), `src/engine/gantt.cpp` (layout, `GanttAxis`), `src/engine/gantt_edit.*` (role → cells/items, drag/snap, range, rows, items – pure and unit-tested), `src/ppttc.cpp` (`parseGantt`, `ganttEditsJson`), `addin/elements.cpp` section "Zeitplan" (modify/drag/hit test/commands/calendar), `addin/events.cpp` (handles, gestures, double-click, cursor hit), `addin/calendar_window.*`, `addin/gallery.*`, context menu generated in `addin/addin.cpp` (`ganttMenuXml`, inserted at the `<!--rethink:gantt-menu x-->` markers of `ribbon.xml`; ids get a suffix per PowerPoint context menu because ribbon ids must be unique).
+
+### Gantt – not yet like the original (next candidates)
+
+- Anchors between items (handle dropped on another item's anchor point), Ctrl+drag duplicate, Shift+Ctrl+drag duplicate-and-anchor.
+- Dragging items vertically into another row; dragging rows; keyboard shortcuts (Del, F2, Ctrl+Alt+↑↓, Shift+Alt+↑↓/←→).
+- Red crosshairs with date tooltip while hovering (overlay redraw on mouse move would be needed).
+- Scale labels ("Add Scale Label"), fiscal years, format dropdown in a mini toolbar (formats only via JSON today), milestone marker styles, label content menus (start/end/range per item), manual label positions.
+- Label columns: multi-row Responsible/Remark labels with brackets, indentation hierarchy, checkboxes and Harvey balls, pasting multi-line text into a column.
+- Right-to-left layout; Excel range link (rethink offers the Excel datasheet instead).
 
 ## Build & run
 
 ```bat
-:: Developer Command Prompt for VS 2022, in the repository folder
+:: Developer Command Prompt (vcvarsall.bat x64), in the repository folder
 cmake -S . -B %TEMP%\rtk -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build %TEMP%\rtk
 ```
 - Copy `rethink.exe` and `rethink-addin.dll` into `bin\` (create it; it is git-ignored). **Close PowerPoint first** – it locks the registered DLL.
 - `scripts\register.ps1` registers the add-in for the current user (HKCU only); `scripts\unregister.ps1` removes it.
 - Use a short build directory: MSBuild fails on paths > 260 characters.
+- On ARM64 Windows build the **x64** target (`vcvarsall.bat x64`): Office runs as x64 under emulation and can only load x64 add-ins.
 
 ## Tests
 
 | Command | Covers |
 |---|---|
-| `%TEMP%\rtk\engine_test.exe` | engine (waterfall arithmetic, layout bounds), datasheet XLSX round trip, cell input parsing, drag/step maths and scale |
-| `%TEMP%\rtk\addin_selftest.exe %TEMP%\rtk\rethink-addin.dll` | COM class factory, ribbon XML, callbacks, no PowerPoint needed |
-| `tests\run-tests.ps1 -Exe bin\rethink.exe` | CLI validation and error messages |
-| `tests\waterfall-addin-test.ps1` | add-in end to end through PowerPoint automation (incl. drag via `DragSegment`, undo) |
-| `tests\addin-test.ps1` | older add-in commands (24 checks) |
+| `%TEMP%\rtk\engine_test.exe` | engine: waterfall arithmetic and orientations, layout bounds, dates/weeks/formats, Gantt layout, Gantt editing (drag/snap/range/rows/items), datasheet XLSX round trip, cell input |
+| `%TEMP%\rtk\addin_selftest.exe %TEMP%\rtk\rethink-addin.dll` | COM class factory, ribbon XML incl. generated context menus and unique ids, callbacks, no PowerPoint needed |
+| `tests\run-tests.ps1 -Exe bin\rethink.exe` | CLI validation and error messages (incl. Gantt options and items) |
+| `bin\rethink.exe build tests\gantt.ppttc -o tests\out\gantt.pptx`, then `tests\export-png.ps1 tests\out\gantt.pptx` | Gantt and horizontal waterfall from `.ppttc`, PNGs for a visual check |
+| `tests\waterfall-addin-test.ps1` | waterfall in PowerPoint (insert, handles, drag, undo, datasheets, Excel, resize, orientation, build-down) |
+| `tests\gantt-addin-test.ps1` | Gantt in PowerPoint (insert, overlay handles, drag end/move/milestone/range, Esc, undo, datasheet sync, context commands and toggles, calendar, resize) |
+| `tests\gantt-mouse-test.ps1` | real mouse input on the overlay (takes over the mouse for a few seconds) |
+| `tests\ribbon-check.ps1` | PowerPoint accepts the ribbon XML; screenshot of the tab |
+| `tests\addin-test.ps1 -OutDir %TEMP%\rtk-addin-test` | older add-in commands; keep `-OutDir` outside OneDrive (PowerPoint reports OneDrive files as https URLs) |
 
-Automation cannot click or drag; every interactive feature has an automation entry point on `COMAddIns("rethink.addin").Object` (`InsertWaterfall`, `AdjustSegment`, `DragSegment`, `OverlayInfo`, `OpenDatasheet`, `DatasheetEnter`, `DatasheetPaste`, `DatasheetCell`, `CloseDatasheet`, `OpenExcelDatasheet`, `DatasheetWorkbook`, `ApplyDatasheets`, `EventStatus`, …) that runs the same code path. Add one for each new interaction.
+Run the PowerShell tests in their own process (`powershell -NoProfile -ExecutionPolicy Bypass -File …`). The scripts are UTF-8 **with BOM** so Windows PowerShell 5.1 reads the umlauts; keep it that way for new scripts.
+
+Automation cannot click; every interaction has an entry point on `COMAddIns("rethink.addin").Object` that runs the same code path: `InsertElement(kind, orientation)`, `AdjustSegment`, `DragSegment`, `GanttDrag(role, grip, "px;…", cancel)`, `GanttCommand(id, x, y)`, `GanttToggle(id, pressed, x, y)`, `GanttPressed`, `GanttHit(x, y)`, `GanttTargets`, `SetGanttDates(role, first, last)`, `OpenCalendar`/`CloseCalendar`, `OverlayInfo`, `OpenDatasheet`, `DatasheetEnter`, `DatasheetPaste`, `DatasheetCell`, `CloseDatasheet`, `OpenExcelDatasheet`, `DatasheetWorkbook`, `ApplyDatasheets`, `EventStatus`, `RibbonStatus`, `ActivateTab`. Add one for each new interaction.
 
 ## Architecture in one page
 
 ```
 .ppttc JSON ──► src/ppttc.*  ──► DataItem {name, table, chartJson}
                                      │
-                       src/engine/*  ▼  layoutChart(item, options, box) → Drawing {prims[]}
+                       src/engine/*  ▼  layoutChart(item, options, box) → Drawing {prims[], axis, rows}
                                      │                     (pure C++, unit-tested)
               ┌──────────────────────┴───────────────────────┐
    src/render_element.* (OOXML group + RETHINK_MODEL tag)   addin/elements.* (PowerPoint object model,
    used by the CLI (src/build.cpp)                           role-named shapes, in-place update, tags)
                                                                    │
-                       addin/events.* (selection/double-click events, overlay tracking, handle actions)
-                       addin/overlay.* (layered window: glow, label, handles, table icon)
+                       addin/events.* (selection/double-click events, overlay tracking, handle gestures)
+                       addin/overlay.* (layered window: glow, label, handles, tooltip, table icon)
                        addin/datasheet_window.* (built-in spreadsheet-like datasheet)
-                       addin/addin.cpp (COM add-in, ribbon callbacks, automation interface)
+                       addin/calendar_window.* (range/date calendar), addin/gallery.* (insert menu)
+                       addin/addin.cpp (COM add-in, ribbon + context menu callbacks, automation interface)
 ```
 
 Key rules:
-- The engine never touches COM or XML; renderers never compute layout.
-- Shapes inside a rethink chart are named by role (`segment r1 c3`, `label r1 c3`, `connector c1`, `table cell r1 c4`, …). Same roles ⇒ update in place; different roles ⇒ full redraw (keeping name, z-order).
-- Group tags: `RETHINK_MODEL` (JSON data item), `RETHINK_LAYOUT` (layout box + group rect when last drawn). Child tags: `RETHINK_STYLE` (last colour set by rethink, to detect user formatting), `RETHINK_SEG` (segment kind).
+- The engine never touches COM or XML; renderers never compute layout. Edits of the model (Gantt drag, rows, items) are engine functions too (`gantt_edit.h`).
+- Shapes inside a rethink chart are named by role (`segment r1 c3`, `bar r2`, `milestone r1`, `item 0`, `scale month 2`, …). Same roles ⇒ update in place; different roles ⇒ full redraw (keeping name, z-order and the selection).
+- Group tags: `RETHINK_MODEL` (JSON data item), `RETHINK_LAYOUT` (layout box + group rect when last drawn), `RETHINK_KIND` (`waterfall up|down|right|left` or `gantt`). Child tags: `RETHINK_STYLE` (last colour set by rethink, to detect user formatting), `RETHINK_SEG` (`pos`/`neg`/`e`; Gantt: `bar`/`milestone`/`bracket`/`shade`).
 - During a handle drag the overlay holds the mouse capture: never show a message box mid-drag (collect the error, report after `DragEnd`), and the prim cache (`samePrim` against the last drawing) is only valid for that reason.
-- WinRT JSON, OPC and MSXML run on a worker thread (`onWorker`) – never initialise WinRT on PowerPoint's UI thread.
+- WinRT JSON, OPC and MSXML run on a worker thread (`onWorker`) – never initialise WinRT on PowerPoint's UI thread. Pure layout may run on the UI thread (drag steps do).
 - Never redraw or select inside a mouse handler of the overlay; post a message and act afterwards. Never block on Excel; treat `RPC_E_CALL_REJECTED` / `RPC_E_SERVERCALL_RETRYLATER` as "retry next tick".
+- Layered overlay pixels with alpha 0 are click-through even if `WM_NCHITTEST` says otherwise: invisible handles are drawn with alpha ≈ 1/255.
 
 ## Conventions
 

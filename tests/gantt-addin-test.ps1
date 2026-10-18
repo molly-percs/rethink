@@ -1,0 +1,204 @@
+﻿# Ende-zu-Ende-Test des Zeitplans (Gantt) im Add-in (registriertes Add-in nötig: scripts\register.ps1).
+# Automation über COMAddIns("rethink.addin").Object; Ziehen läuft über GanttDrag denselben Weg wie die Maus
+# (Overlay-Gesten), Kontextmenübefehle über GanttCommand mit Folienkoordinaten statt Mausposition.
+param([string]$OutDir = (Join-Path $PSScriptRoot 'out\addin-gantt'), [switch]$KeepOpen)
+$ErrorActionPreference = 'Stop'
+$failed = 0
+function Expect($ok, $what) { if ($ok) { "ok    $what" } else { "FEHL  $what"; $script:failed++ } }
+function Ids($group) { (@($group.GroupItems | ForEach-Object { $_.Id }) -join ',') }
+function Roles($group) { @($group.GroupItems | ForEach-Object { $_.Name }) }
+function D([string]$s) { [datetime]::ParseExact($s, 'yyyy-MM-dd', $null) }
+# "range=a..b; scales=…; bar r2=a..b; milestone r3=a; …" → Hashtable
+function Targets($api) {
+    $t = @{}
+    foreach ($part in ($api.GanttTargets() -split '; ')) {
+        $kv = $part -split '=', 2
+        $t[$kv[0]] = $kv[1]
+    }
+    $t
+}
+function StartOf($t, $role) { D (($t[$role] -split '\.\.')[0]) }
+function EndOf($t, $role) { D (($t[$role] -split '\.\.')[1]) }
+function Center($shape) { @(($shape.Left + $shape.Width / 2), ($shape.Top + $shape.Height / 2)) }
+
+New-Item -ItemType Directory -Force $OutDir | Out-Null
+$pptWasRunning = [bool](Get-Process POWERPNT -ErrorAction SilentlyContinue)
+$pp = New-Object -ComObject PowerPoint.Application
+$pres = $null
+try {
+    $pres = $pp.Presentations.Add(-1)
+    $slide = $pres.Slides.Add(1, 12)
+    $pp.ActiveWindow.View.GotoSlide(1)
+    $addin = $pp.COMAddIns.Item('rethink.addin')
+    Expect ($addin.Connect) 'Add-in geladen'
+    $api = $addin.Object
+    Expect ($api.RibbonStatus() -eq 'geladen') 'Ribbon-XML (mit Kontextmenü „rethink-Zeitplan“) angenommen'
+
+    # 1. Einfügen: aktueller und die zwei folgenden Monate
+    $name = $api.InsertElement('gantt', 'up', $false)
+    $group = $slide.Shapes.Item($name)
+    Expect ($group.Type -eq 6 -and $group.Tags.Item('RETHINK_MODEL') -match '"gantt"' -and $group.Tags.Item('RETHINK_KIND') -eq 'gantt') "Zeitplan '$name' mit Modell"
+    $roles = Roles $group
+    Expect ($roles -contains 'bar r2' -and $roles -contains 'milestone r3' -and $roles -contains 'milestone r1' -and $roles -contains 'activity r2' -and $roles -contains 'headline activity') 'Formen heißen nach ihrer Rolle (Balken, Meilensteine, Beschriftungen)'
+    $t = Targets $api
+    $first = Get-Date -Day 1 -Hour 0 -Minute 0 -Second 0 -Millisecond 0
+    $expectedRange = '{0:yyyy-MM-dd}..{1:yyyy-MM-dd}' -f $first, $first.AddMonths(3).AddDays(-1)
+    Expect ($t['range'] -eq $expectedRange) "Bereich: aktueller und zwei folgende Monate ($($t['range']))"
+    Expect ($t['scales'] -match 'Month') "automatische Skalen ($($t['scales']))"
+
+    # 2. Overlay: Griffe an Balkenenden, Flächen zum Verschieben, Pfeile an den Skalenenden
+    $group.Select(); Start-Sleep -Milliseconds 700
+    $info = $api.OverlayInfo()
+    Expect ($info -match 'sichtbar=true') 'Overlay sichtbar'
+    Expect ($info -match '\[anfang bar r2 ' -and $info -match '\[ende bar r2 ' -and $info -match '\[verschieben bar r2 ') 'Balken: Griffe an Anfang und Ende, Fläche zum Verschieben'
+    Expect ($info -match '\[verschieben milestone r3 ') 'Meilenstein verschiebbar'
+    Expect ($info -match '\[bereich-anfang range ' -and $info -match '\[bereich-ende range ') 'Pfeile an beiden Skalenenden'
+    Expect ($info -match '\[datenblatt ') 'Datenblatt-Symbol'
+
+    # Maßstab für Erwartungen: Folienpunkte je Bildschirmpixel und je Tag
+    $win = $pp.ActiveWindow
+    $ptPerPx = 1000 / ($win.PointsToScreenPixelsX(1000) - $win.PointsToScreenPixelsX(0))
+    $plotW = $group.GroupItems.Item('scale end').Left - $group.GroupItems.Item('scale start').Left
+    $days = ((D (($t['range'] -split '\.\.')[1])) - (D (($t['range'] -split '\.\.')[0]))).TotalDays + 1
+    $ptPerDay = $plotW / $days
+
+    # 3. Ende ziehen: an Ort und Stelle, gerastet, Anfang bleibt
+    $s0 = StartOf $t 'bar r2'; $e0 = EndOf $t 'bar r2'
+    $ids = Ids $group
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $tips = $api.GanttDrag('bar r2', 1, '10;30;60', $false)
+    $sw.Stop()
+    $t = Targets $api
+    $delta = ((EndOf $t 'bar r2') - $e0).TotalDays
+    $expected = 60 * $ptPerPx / $ptPerDay
+    Expect ((StartOf $t 'bar r2') -eq $s0 -and $delta -gt 0 -and [math]::Abs($delta - $expected) -le 7) ("Ende ziehen um 60 px: +{0} Tage (erwartet ~{1:N1}, {2} ms)" -f $delta, $expected, $sw.ElapsedMilliseconds)
+    Expect ($tips -match 'KW') "Kurzinfo beim Ziehen ($(($tips -split ' \| ')[-1]))"
+    Expect ((Ids $slide.Shapes.Item($name)) -eq $ids) '… an Ort und Stelle (dieselben Formen)'
+    Expect ($slide.Shapes.Item($name).Tags.Item('RETHINK_MODEL') -match ('"date":"{0:yyyy-MM-dd}"' -f (EndOf $t 'bar r2'))) '… Modell am Element gespeichert'
+
+    # 4. Verschieben erhält die Dauer
+    $s1 = StartOf $t 'bar r2'; $e1 = EndOf $t 'bar r2'
+    [void]$api.GanttDrag('bar r2', 2, '-20;-45', $false)
+    $t = Targets $api
+    Expect ((StartOf $t 'bar r2') -lt $s1 -and ((EndOf $t 'bar r2') - (StartOf $t 'bar r2')) -eq ($e1 - $s1)) ('Verschieben: {0:dd.MM.} → {1:dd.MM.}, Dauer bleibt' -f $s1, (StartOf $t 'bar r2'))
+
+    # 5. Esc bricht ab
+    $before = $t['bar r2']
+    [void]$api.GanttDrag('bar r2', 2, '40;80', $true)
+    $t = Targets $api
+    Expect ($t['bar r2'] -eq $before) 'Esc beim Ziehen: Daten unverändert'
+
+    # 6. Meilenstein ziehen
+    $m0 = D $t['milestone r3']
+    [void]$api.GanttDrag('milestone r3', 2, '30;50', $false)
+    $t = Targets $api
+    Expect ((D $t['milestone r3']) -gt $m0) ('Meilenstein ziehen: {0:dd.MM.} → {1:dd.MM.}' -f $m0, (D $t['milestone r3']))
+
+    # 7. Ein Rückgängig nimmt das ganze Ziehen zurück
+    $before = $t['bar r2']
+    $slide.Shapes.Item($name).Select()
+    [void]$api.GanttDrag('bar r2', 1, '20;40;70', $false)
+    $pp.CommandBars.ExecuteMso('Undo'); Start-Sleep -Milliseconds 400
+    $slide.Shapes.Item($name).Select()
+    Expect ((Targets $api)['bar r2'] -eq $before) 'ein Rückgängig nimmt das ganze Ziehen zurück'
+
+    # 8. Datenblatt: zeigt gezogene Daten, Eingabe zeichnet neu
+    $api.OpenDatasheet($false)
+    Expect ($api.DatasheetCell(0, 1) -eq 'Start' -and $api.DatasheetCell(2, 0) -eq 'Analyse') 'Datenblatt: Überschriften und Aktivitäten'
+    [void]$api.GanttDrag('bar r2', 1, '25', $false)
+    $t = Targets $api
+    Expect ($api.DatasheetCell(2, 2) -eq ('{0:dd.MM.yyyy}' -f (EndOf $t 'bar r2'))) "offenes Datenblatt folgt dem Ziehen ($($api.DatasheetCell(2, 2)))"
+    $newEnd = (StartOf $t 'bar r2').AddDays(10)
+    $api.DatasheetEnter(2, 2, ('{0:d.M.yy}' -f $newEnd))
+    $t = Targets $api
+    Expect ((EndOf $t 'bar r2') -eq $newEnd) ('Eingabe im Datenblatt (T.M.JJ) setzt das Ende ({0:dd.MM.yyyy})' -f $newEnd)
+    $api.CloseDatasheet()
+
+    # 9. Skalenende ziehen: Bereich in Einheiten der feinsten Skala
+    $slide.Shapes.Item($name).Select()
+    $range0 = (Targets $api)['range']
+    [void]$api.GanttDrag('range', 1, '60;120', $false)
+    $t = Targets $api
+    $rangeEnd = D (($t['range'] -split '\.\.')[1])
+    Expect ($t['range'] -ne $range0 -and $rangeEnd -gt (D (($range0 -split '\.\.')[1]))) "Skalenende ziehen verlängert den Bereich ($range0 → $($t['range']))"
+
+    # 10. Kontextmenübefehle an einer Mausposition (Folienkoordinaten)
+    $group = $slide.Shapes.Item($name)
+    $row3 = $group.GroupItems.Item('activity r3')
+    $bar3 = $group.GroupItems.Item('bar r3')
+    $y3 = $row3.Top + $row3.Height / 2
+    $x3 = $bar3.Left + $bar3.Width / 2
+    Expect ($api.GanttHit($x3, $y3) -match 'zeile=3 .*element=bar r3') "Treffer: Zeile 3, Balken ($($api.GanttHit($x3, $y3)))"
+    $api.GanttCommand('rtkG_insertRow', $x3, $y3)
+    $group = $slide.Shapes.Item($name)
+    Expect ($group.GroupItems.Item('activity r4').TextFrame.TextRange.Text -eq 'Neue Aktivität' -and $group.GroupItems.Item('activity r5').TextFrame.TextRange.Text -eq 'Umsetzung') 'Zeile einfügen (unter der angeklickten)'
+    $row4 = $group.GroupItems.Item('activity r4')
+    $y4 = $row4.Top + $row4.Height / 2
+    $api.GanttCommand('rtkG_newBar', $x3, $y4)
+    $api.GanttCommand('rtkG_newMilestone', $x3 + 60, $y4)
+    $t = Targets $api
+    Expect ($t.ContainsKey('bar r4') -and $t.ContainsKey('milestone r4')) "Neuer Balken und Meilenstein in der leeren Zeile → Datenblatt ($($t['bar r4']), $($t['milestone r4']))"
+    $row2 = $slide.Shapes.Item($name).GroupItems.Item('activity r2')
+    $api.GanttCommand('rtkG_newChevron', $x3, $row2.Top + $row2.Height / 2)
+    $group = $slide.Shapes.Item($name)
+    Expect ((Roles $group) -contains 'item 0' -and $group.GroupItems.Item('item 0').AutoShapeType -eq 52) 'Neues Chevron als frei gesetztes Element'
+    $c = Center $group.GroupItems.Item('item 0')
+    $api.GanttCommand('rtkG_deleteItem', $c[0], $c[1])
+    Expect (-not ((Roles $slide.Shapes.Item($name)) -contains 'item 0')) 'Element löschen'
+    $api.GanttCommand('rtkG_rowUp', $x3, $y4)
+    Expect ($slide.Shapes.Item($name).GroupItems.Item('activity r3').TextFrame.TextRange.Text -eq 'Neue Aktivität') 'Zeile nach oben'
+    $api.GanttCommand('rtkG_deleteRow', $x3, $y3)
+    $texts = @($slide.Shapes.Item($name).GroupItems | Where-Object { $_.HasTextFrame -eq -1 } | ForEach-Object { $_.TextFrame.TextRange.Text })
+    Expect (-not ($texts -contains 'Neue Aktivität') -and ($texts -contains 'Konzept')) 'Zeile löschen'
+    $api.GanttCommand('rtkG_fit')
+    $t = Targets $api
+    $starts = @($t.Keys | Where-Object { $_ -match '^(bar|milestone) r\d+$' } | ForEach-Object { D (($t[$_] -split '\.\.')[0]) })
+    Expect ((D (($t['range'] -split '\.\.')[0])) -eq ($starts | Measure-Object -Minimum).Minimum) "Skala an Daten anpassen ($($t['range']))"
+
+    # 11. Anzeige über die Umschalter des Kontextmenüs
+    Expect ($api.GanttPressed('rtkT_separators')) 'Trennlinien sind an'
+    $api.GanttToggle('rtkT_separators', $false)
+    Expect (-not ((Roles $slide.Shapes.Item($name)) -match '^separator')) 'Trennlinien aus'
+    $api.GanttToggle('rtkT_separators', $true)
+    $api.GanttToggle('rtkT_barLabels', $true)
+    Expect ((Roles $slide.Shapes.Item($name)) -contains 'bar r2 label') 'Datumsbeschriftung an Balken'
+    $api.GanttToggle('rtkT_responsible', $true)
+    Expect ((Roles $slide.Shapes.Item($name)) -contains 'headline responsible' -and $api.GanttPressed('rtkT_responsible')) 'Spalte „Verantwortlich“ eingeblendet'
+    $api.GanttToggle('rtkT_scaleYear', $true)
+    Expect ((Targets $api)['scales'] -match '^Year') ("Skala Jahr von Hand dazu (" + (Targets $api)['scales'] + ")")
+    $api.GanttCommand('rtkG_autoScales')
+    Expect (-not ((Targets $api)['scales'] -match 'Year')) 'Automatische Skalen wieder an'
+    $api.GanttToggle('rtkT_weekendsHidden', $true)
+    Expect ($api.GanttPressed('rtkT_weekendsHidden') -and -not $api.GanttPressed('rtkT_weekendsShaded')) 'Wochenenden ausgeblendet'
+    $api.GanttToggle('rtkT_weekendsShaded', $true)
+
+    # 12. Bereich wie im Kalender: zwei Wochen → Tagesskala, Wochenenden schattiert
+    $bar = StartOf (Targets $api) 'bar r2'
+    $api.SetGanttDates('', ('{0:yyyy-MM-dd}' -f $bar), ('{0:yyyy-MM-dd}' -f $bar.AddDays(13)))
+    $roles = Roles $slide.Shapes.Item($name)
+    Expect (($roles -contains 'scale day 1') -and ($roles -match '^weekend')) "zwei Wochen: Tagesskala und schattierte Wochenenden ($((Targets $api)['scales']))"
+    $api.OpenCalendar('')
+    Expect ($api.CloseCalendar()) 'Kalender öffnet und schließt'
+    $api.GanttCommand('rtkG_fit')
+
+    # 13. Größe ändern → Neu-Layout
+    $group = $slide.Shapes.Item($name)
+    $group.Select(); Start-Sleep -Milliseconds 400
+    $group.Width = $group.Width * 0.85
+    $target = $group.Width
+    $deadline = (Get-Date).AddSeconds(6); $ok = $false
+    do { Start-Sleep -Milliseconds 250; $l = $slide.Shapes.Item($name).Tags.Item('RETHINK_LAYOUT'); $w = [double]($l.Split(';')[6]); $ok = [math]::Abs($w - $slide.Shapes.Item($name).Width) -lt 1 -and [math]::Abs($w - $target) -lt 8 } until ($ok -or (Get-Date) -gt $deadline)
+    Expect $ok 'Größenänderung zeichnet neu'
+
+    # 14. Bild
+    $slide.Export((Join-Path $OutDir 'slide1.png'), 'PNG', 1600, 900)
+    if ($KeepOpen) { $slide.Shapes.Item($name).Select() }
+} finally {
+    if (-not $KeepOpen) {
+        if ($pres) { $pres.Saved = -1; $pres.Close() }
+        if (-not $pptWasRunning) { $pp.Quit() }
+    }
+    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($pp)
+}
+if ($failed) { throw "$failed Prüfungen fehlgeschlagen" }
+"Alle Prüfungen bestanden."

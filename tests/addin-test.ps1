@@ -92,7 +92,7 @@ try {
     $expected = Join-Path $OutDir 'addin-test.pptx'
     if (Test-Path $expected) { Remove-Item -LiteralPath $expected }
 
-    $opened = Call $rt 'BuildFrom' @($ppttc)
+    $opened = Call $rt 'BuildFrom' @([string]$ppttc)
     Check ($opened -eq $expected) "BuildFrom erzeugt und öffnet $opened"
     $out = $pp.Presentations | Where-Object FullName -eq $opened; $own += $out
     $s = $out.Slides.Item(1)
@@ -105,11 +105,11 @@ try {
     Check ((Call $rt 'LastWarnings') -eq '') 'keine Warnungen'
 
     # Zieldatei ist geöffnet -> freier Name statt Überschreiben
-    $second = Call $rt 'BuildFrom' @($ppttc)
+    $second = Call $rt 'BuildFrom' @([string]$ppttc)
     Check ($second -eq (Join-Path $OutDir 'addin-test (2).pptx')) "geöffnete Zieldatei wird nicht überschrieben: $(Split-Path $second -Leaf)"
     $own += ($pp.Presentations | Where-Object FullName -eq $second)
 
-    $err = CallError $rt 'BuildFrom' @((Join-Path $OutDir 'gibtsnicht.ppttc'))
+    $err = CallError $rt 'BuildFrom' @([string](Join-Path $OutDir 'gibtsnicht.ppttc'))
     Check ($err -match 'gibtsnicht') "fehlende Datei: Fehlermeldung ('$err')"
 } finally {
     foreach ($p in $own) { try { $p.Saved = -1; $p.Close() } catch { } }

@@ -28,8 +28,10 @@ enum Command : UINT {
 
 class Datasheet {
 public:
-    Datasheet(std::vector<Row> table, std::wstring separator, DatasheetCallbacks callbacks)
-        : table_(std::move(table)), sep_(std::move(separator)), cb_(std::move(callbacks)) {}
+    Datasheet(std::vector<Row> table, std::wstring separator, DatasheetCallbacks callbacks, std::wstring hint)
+        : table_(std::move(table)), sep_(std::move(separator)), cb_(std::move(callbacks)), hint_(std::move(hint)) {
+        if (hint_.empty()) hint_ = L"Enter übernimmt · Strg+V fügt aus Excel ein · „e“ = berechnete Summe · Rechtsklick: Zeilen, %, Farbe";
+    }
 
     HWND create(HWND owner, const std::wstring& title, const RECT& beside, bool show) {
         static bool registered = false;
@@ -289,8 +291,7 @@ private:
         RECT hint{6, area.bottom, client.right - 6, client.bottom};
         fill({0, area.bottom, client.right, client.bottom}, kHeader);
         SetTextColor(dc, kHint);
-        DrawTextW(dc, L"Enter übernimmt · Strg+V fügt aus Excel ein · „e“ = berechnete Summe · Rechtsklick: Zeilen, %, Farbe", -1, &hint,
-                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        DrawTextW(dc, hint_.c_str(), -1, &hint, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         BitBlt(target, 0, 0, client.right, client.bottom, dc, 0, 0, SRCCOPY);
         SelectObject(dc, oldFont);
@@ -709,6 +710,7 @@ private:
     std::vector<std::vector<Row>> undo_;
     std::wstring sep_;
     DatasheetCallbacks cb_;
+    std::wstring hint_;
     Pos cur_{1, 1}, anchor_{1, 1};
     int scrollRow_ = 0, scrollCol_ = 0;
     int cellW_ = 88, cellH_ = 21, headW_ = 38, headH_ = 21, hintH_ = 20;
@@ -716,8 +718,8 @@ private:
 };
 
 Datasheet* openDatasheetWindow(HWND owner, const std::wstring& title, std::vector<Row> table, const std::wstring& decimalSeparator,
-                               DatasheetCallbacks callbacks, const RECT& beside, bool show) {
-    auto* sheet = new Datasheet(std::move(table), decimalSeparator, std::move(callbacks));
+                               DatasheetCallbacks callbacks, const RECT& beside, bool show, const std::wstring& hint) {
+    auto* sheet = new Datasheet(std::move(table), decimalSeparator, std::move(callbacks), hint);
     if (!sheet->create(owner, title, beside, show)) {
         delete sheet;
         throw Error("Das Datenblatt-Fenster konnte nicht geöffnet werden.");

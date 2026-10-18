@@ -76,8 +76,12 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
         case WM_SETCURSOR: {
             const int index = hitHandle(messagePos());
-            const bool valueHandle = index >= 0 && g_content.handles[index].action != OverlayAction::Datasheet;
-            SetCursor(LoadCursorW(nullptr, valueHandle ? IDC_SIZENS : IDC_HAND));
+            if (index < 0 || g_content.handles[index].style == HandleStyle::Datasheet) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+            } else {
+                const OverlayHandle& h = g_content.handles[index];
+                SetCursor(LoadCursorW(nullptr, h.dirX != 0 ? IDC_SIZEWE : IDC_SIZENS));
+            }
             return TRUE;
         }
         case WM_LBUTTONDOWN: {
@@ -91,7 +95,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 post(hwnd, OverlayGesture::Click, 0);
                 return 0;
             }
-            // ▲▼: Klick oder Ziehen entscheidet sich erst an Bewegung bzw. Loslassen
+            // Klick oder Ziehen entscheidet sich erst an Bewegung bzw. Loslassen
             g_press.active = true;
             g_press.start = p;
             SetCapture(hwnd);
@@ -104,11 +108,12 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
             const POINT p = messagePos();
-            const int pixels = g_press.start.y - p.y;
-            if (!g_press.dragging && std::abs(pixels) < GetSystemMetrics(SM_CYDRAG)) return 0;
+            const OverlayHandle& h = g_press.handle;
+            const int pixels = (p.x - g_press.start.x) * h.dirX + (p.y - g_press.start.y) * h.dirY;  // entlang der Griffrichtung
+            if (!g_press.dragging && std::abs(pixels) < GetSystemMetrics(h.dirX != 0 ? SM_CXDRAG : SM_CYDRAG)) return 0;
             g_press.dragging = true;
             g_press.pixels = pixels;
-            SetCursor(LoadCursorW(nullptr, IDC_SIZENS));
+            SetCursor(LoadCursorW(nullptr, h.dirX != 0 ? IDC_SIZEWE : IDC_SIZENS));
             if (!g_press.posted) {
                 g_press.posted = true;
                 post(hwnd, OverlayGesture::Drag, pixels);
@@ -181,24 +186,68 @@ public:
         for (int y = r.top; y < r.bottom; ++y)
             for (int x = r.left; x < r.right; ++x) blend(x, y, c, alpha);
     }
-    // Dreieck mit Spitze nach oben (up) oder unten, weiße Kontur für Sichtbarkeit auf Segmenten
-    void triangle(const RECT& r, bool up) {
-        const double cx = (r.left + r.right) / 2.0, half = (r.right - r.left) / 2.0;
-        for (int y = r.top; y < r.bottom; ++y) {
-            const double t = (y + 0.5 - r.top) / (r.bottom - r.top);  // 0 oben … 1 unten
-            const double w = half * (up ? t : 1 - t);
-            for (int x = r.left; x < r.right; ++x) {
-                const double d = std::fabs(x + 0.5 - cx);
+    // Dreieck mit Spitze nach oben (0), unten (1), links (2) oder rechts (3), weiße Kontur für Sichtbarkeit auf Segmenten
+    void triangle(const RECT& r, int pointing) {
+        const bool vertical = pointing <= 1;
+        const int along0 = vertical ? r.top : r.left, along1 = vertical ? r.bottom : r.right;
+        const double center = vertical ? (r.left + r.right) / 2.0 : (r.top + r.bottom) / 2.0;
+        const double half = vertical ? (r.right - r.left) / 2.0 : (r.bottom - r.top) / 2.0;
+        for (int a = along0; a < along1; ++a) {
+            const double t = (a + 0.5 - along0) / (along1 - along0);  // 0 … 1 entlang der Spitze-Basis-Achse
+            const double w = half * (pointing == 0 || pointing == 2 ? t : 1 - t);
+            const int c0 = vertical ? r.left : r.top, c1 = vertical ? r.right : r.bottom;
+            for (int c = c0; c < c1; ++c) {
+                const double d = std::fabs(c + 0.5 - center);
+                const int x = vertical ? c : a, y = vertical ? a : c;
                 if (d <= w - 1.0) blend(x, y, kBlue, 1.0);
                 else if (d <= w + 0.6) blend(x, y, RGB(255, 255, 255), 0.95);
             }
         }
     }
+    // Schmaler Griff mit weißem Rand (Balkenende)
+    void grip(const RECT& r) {
+        fill(r, RGB(255, 255, 255), 0.95);
+        fill({r.left + 1, r.top + 1, r.right - 1, r.bottom - 1}, kBlue, 1.0);
+    }
+    int width() const { return w_; }
+    int height() const { return h_; }
 
 private:
     std::uint32_t* px_;
     int w_, h_;
 };
+
+// GDI-Text in eine eigene Maske zeichnen und als Alpha in Farbe übernehmen (die Ebene hat keinen GDI-Alphakanal).
+void drawText(Canvas& canvas, HDC screen, HFONT font, const std::wstring& text, RECT rect, UINT format, COLORREF color, double alpha) {
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = canvas.width();
+    info.bmiHeader.biHeight = -canvas.height();
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    HDC maskDc = CreateCompatibleDC(screen);
+    void* maskBits = nullptr;
+    HBITMAP mask = CreateDIBSection(maskDc, &info, DIB_RGB_COLORS, &maskBits, nullptr, 0);
+    if (mask) {
+        HGDIOBJ oldMask = SelectObject(maskDc, mask);
+        HGDIOBJ oldFont = SelectObject(maskDc, font);
+        SetBkMode(maskDc, TRANSPARENT);
+        SetTextColor(maskDc, RGB(255, 255, 255));
+        DrawTextW(maskDc, text.c_str(), -1, &rect, format | DT_SINGLELINE | DT_NOPREFIX);
+        const auto* mp = static_cast<const std::uint32_t*>(maskBits);
+        const int w = canvas.width();
+        for (int y = std::max<int>(rect.top, 0); y < std::min<int>(rect.bottom, canvas.height()); ++y)
+            for (int x = std::max<int>(rect.left, 0); x < std::min<int>(rect.right, w); ++x) {
+                const double coverage = (mp[y * w + x] & 0xFF) / 255.0;
+                if (coverage > 0) canvas.blend(x, y, color, alpha * coverage);
+            }
+        SelectObject(maskDc, oldFont);
+        SelectObject(maskDc, oldMask);
+        DeleteObject(mask);
+    }
+    DeleteDC(maskDc);
+}
 
 }  // namespace
 
@@ -257,50 +306,52 @@ void showOverlay(HWND owner, const OverlayContent& content, OverlayCallback call
     // Winziges, unaufdringliches Etikett über dem Rahmen
     HFONT font = CreateFontW(-scaled(owner, 9), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                              ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-    {
-        // GDI-Text in eine eigene Maske zeichnen und als Alpha übernehmen
-        const wchar_t* label = L"rethink chart";
-        HDC maskDc = CreateCompatibleDC(screen);
-        BITMAPINFO maskInfo = info;
-        void* maskBits = nullptr;
-        HBITMAP mask = CreateDIBSection(maskDc, &maskInfo, DIB_RGB_COLORS, &maskBits, nullptr, 0);
-        if (mask) {
-            HGDIOBJ oldMask = SelectObject(maskDc, mask);
-            HGDIOBJ oldFont = SelectObject(maskDc, font);
-            SetBkMode(maskDc, TRANSPARENT);
-            SetTextColor(maskDc, RGB(255, 255, 255));
-            RECT textRect{left, top - glow - scaled(owner, 13), width, top - glow};
-            DrawTextW(maskDc, label, -1, &textRect, DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_NOPREFIX);
-            const auto* mp = static_cast<const std::uint32_t*>(maskBits);
-            for (int i = 0; i < width * height; ++i) {
-                const double coverage = (mp[i] & 0xFF) / 255.0;
-                if (coverage > 0) canvas.blend(i % width, i / width, kBlue, 0.85 * coverage);
-            }
-            SelectObject(maskDc, oldFont);
-            SelectObject(maskDc, oldMask);
-            DeleteObject(mask);
-        }
-        DeleteDC(maskDc);
-    }
-    DeleteObject(font);
+    drawText(canvas, screen, font, L"rethink chart", {left, top - glow - scaled(owner, 13), width, top - glow}, DT_LEFT | DT_BOTTOM, kBlue, 0.85);
 
     // Griffe und Datenblatt-Symbol (Fensterkoordinaten)
     for (auto& h : content.handles) {
         RECT r = h.rect;
         OffsetRect(&r, -g_origin.x, -g_origin.y);
-        if (h.action == OverlayAction::Datasheet) {
-            canvas.fill(r, kBlue, 1.0);
-            // stilisiertes Tabellenraster
-            const int w = r.right - r.left, hh = r.bottom - r.top;
-            for (int i = 1; i <= 2; ++i) {
-                const int x = r.left + w * i / 3, y = r.top + hh * i / 3;
-                canvas.fill({x, r.top + 3, x + 1, r.bottom - 3}, RGB(255, 255, 255), 0.95);
-                canvas.fill({r.left + 3, y, r.right - 3, y + 1}, RGB(255, 255, 255), 0.95);
+        switch (h.style) {
+            case HandleStyle::Datasheet: {
+                canvas.fill(r, kBlue, 1.0);
+                // stilisiertes Tabellenraster
+                const int w = r.right - r.left, hh = r.bottom - r.top;
+                for (int i = 1; i <= 2; ++i) {
+                    const int x = r.left + w * i / 3, y = r.top + hh * i / 3;
+                    canvas.fill({x, r.top + 3, x + 1, r.bottom - 3}, RGB(255, 255, 255), 0.95);
+                    canvas.fill({r.left + 3, y, r.right - 3, y + 1}, RGB(255, 255, 255), 0.95);
+                }
+                break;
             }
-        } else {
-            canvas.triangle(r, h.action == OverlayAction::Up);
+            case HandleStyle::Triangle:
+            case HandleStyle::Arrow: canvas.triangle(r, h.pointing); break;
+            case HandleStyle::Grip: canvas.grip(r); break;
+            case HandleStyle::Hidden: canvas.fill(r, kBlue, 0.004); break;  // fast unsichtbar, aber für das Fenster vorhanden
         }
     }
+
+    // Kurzinfo beim Ziehen: weißes Kästchen mit blauem Rand über dem Element
+    if (!content.tooltip.empty()) {
+        HFONT tipFont = CreateFontW(-scaled(owner, 11), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                    CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        HDC measure = CreateCompatibleDC(screen);
+        HGDIOBJ old = SelectObject(measure, tipFont);
+        SIZE extent{};
+        GetTextExtentPoint32W(measure, content.tooltip.c_str(), static_cast<int>(content.tooltip.size()), &extent);
+        SelectObject(measure, old);
+        DeleteDC(measure);
+        const int padX = scaled(owner, 6), padY = scaled(owner, 3);
+        const int tw = extent.cx + 2 * padX, th = extent.cy + 2 * padY;
+        int x = content.tooltipAt.x - g_origin.x - tw / 2, y = content.tooltipAt.y - g_origin.y - th;
+        x = std::clamp(x, 0, std::max(0, width - tw));
+        y = std::clamp(y, 0, std::max(0, height - th));
+        canvas.fill({x, y, x + tw, y + th}, kBlue, 1.0);
+        canvas.fill({x + 1, y + 1, x + tw - 1, y + th - 1}, RGB(255, 255, 255), 1.0);
+        drawText(canvas, screen, tipFont, content.tooltip, {x + padX, y + padY, x + tw - padX, y + th - padY}, DT_LEFT | DT_TOP, RGB(32, 32, 32), 1.0);
+        DeleteObject(tipFont);
+    }
+    DeleteObject(font);
 
     POINT position = g_origin, source{0, 0};
     SIZE size{width, height};

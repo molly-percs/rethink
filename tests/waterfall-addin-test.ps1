@@ -154,7 +154,28 @@ try {
     $target = $group.Width
     Expect (WaitFor { $l = $slide.Shapes.Item($name).Tags.Item('RETHINK_LAYOUT'); $w = [double]($l.Split(';')[6]); [math]::Abs($w - $slide.Shapes.Item($name).Width) -lt 1 -and [math]::Abs($w - $target) -lt 8 }) 'Größenänderung zeichnet neu (Layout-Rahmen folgt)'
 
-    # 6. Bild
+    # 6. Ausrichtung (Einfügemenü: Pfeile um das Symbol) und abbauender Wasserfall
+    $slide2 = $pres.Slides.Add(2, 12)
+    $pp.ActiveWindow.View.GotoSlide(2)
+    $right = $api.InsertElement('waterfall', 'right', $false)
+    $g2 = $slide2.Shapes.Item($right)
+    Expect ($g2.Tags.Item('RETHINK_KIND') -eq 'waterfall right' -and $g2.Tags.Item('RETHINK_MODEL') -match '"orientation":"right"') 'Wasserfall nach rechts eingefügt'
+    $s1 = $g2.GroupItems.Item('segment r1 c1'); $s2 = $g2.GroupItems.Item('segment r1 c2')
+    Expect ($s2.Left -gt $s1.Left -and $s2.Top -gt $s1.Top -and $s1.Width -gt $s1.Height) 'Balken wachsen nach rechts, Kategorien untereinander'
+    $g2.Select(); Start-Sleep -Milliseconds 600
+    $info = $api.OverlayInfo()
+    Expect ($info -match '\[auf r1 c2 ' -and $info -match '\[ab r1 c2 ') 'Griffe ◀▶ an den Balken'
+    $r = $api.DragSegment(1, 2, '20;40')   # Umsatz 40, 40 px nach rechts = mehr
+    $ppu = [double]([regex]::Match($r, 'pixelProEinheit=([\d.]+)').Groups[1].Value)
+    $grown = 40 + [math]::Round(40 / $ppu, [MidpointRounding]::AwayFromZero)
+    Expect ($grown -gt 40 -and $slide2.Shapes.Item($right).Tags.Item('RETHINK_MODEL') -match ('"number":' + $grown + '[,}]')) "waagerecht ziehen: 40 → $grown ($r)"
+    $down = $api.InsertElement('waterfall-down', 'up', $false)
+    $g3 = $slide2.Shapes.Item($down)
+    $texts = @($g3.GroupItems | Where-Object { $_.HasTextFrame -eq -1 } | ForEach-Object { $_.TextFrame.TextRange.Text })
+    Expect ($g3.Tags.Item('RETHINK_MODEL') -match '"string":"e"' -and $texts -contains '100') 'abbauender Wasserfall: Summe links (e rückwärts = 100)'
+    $slide2.Export((Join-Path $OutDir 'slide2.png'), 'PNG', 1280, 720)
+
+    # 7. Bild
     $slide.Export((Join-Path $OutDir 'slide1.png'), 'PNG', 1280, 720)
     if ($KeepOpen) { $slide.Shapes.Item($name).Select() }
 } finally {

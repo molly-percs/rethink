@@ -36,8 +36,8 @@ Slide library and templates are intentionally **out of scope**.
 | 100% stacked | sum may differ from 100%; percent and/or absolute labels; 100% marker | D (N 🟡) | ⬜ |
 | Clustered | segments side by side | D (N ✅) | ⬜ |
 | **Waterfall (build-up)** | `e`, several segments per column, connectors, data table | D | ✅ (connectors automatic only) |
-| Waterfall (build-down) | same as build-up with descending default data | D | ⬜ (next) |
-| Chart orientation | rotate/flip via the insert menu (up, down, left, right) | D | ⬜ (next) |
+| Waterfall (build-down) | same as build-up with descending default data (`e` in the first column) | D | ✅ |
+| Chart orientation | rotate/flip via the insert menu (up, down, left, right) | D | ✅ waterfall (`orientation`) |
 | Line / profile | interpolation, markers, value axis for increasing X, second Y axis | D (N ✅) | ⬜ |
 | Area / 100% area | stacked, totals, interpolation | D (N ✅) | ⬜ |
 | Combination | lines and columns per series | D | ⬜ |
@@ -45,7 +45,7 @@ Slide library and templates are intentionally **out of scope**.
 | Mekko unit axis | "X extent" row for widths, absolute heights | D | ⬜ |
 | Pie / doughnut | one category, rotation, inside/outside labels | D (N ✅) | ⬜ |
 | Scatter / bubble | rows = points (X, Y, size, group), trend lines, partitions | D | ⬜ |
-| **Gantt / timeline** | calendar scales, activities, bars, milestones, drag in days | D | ⬜ (requested next) |
+| **Gantt / timeline** | calendar scales, activities, bars, milestones, drag in days | D | ✅ core (see HANDOFF.md: anchors, crosshairs, scale labels, Harvey balls … open) |
 
 ## Decorations, labels, axes
 
@@ -71,24 +71,25 @@ Slide library and templates are intentionally **out of scope**.
 | Feature | Status |
 |---|---|
 | Ribbon tab "rethink" | ✅ |
-| Insert menu like the original (gallery of all chart types, orientation via arrows around each icon) | ⬜ (next) |
-| Insert per chart type | 🟡 waterfall ✅ |
+| Insert menu like the original (gallery of all chart types, orientation via arrows around each icon) | ✅ |
+| Insert per chart type | 🟡 waterfall ✅, build-down ✅, Gantt ✅ |
 | Built-in datasheet (spreadsheet look; table icon bottom right; double-click) with live update | ✅ typing, paste, undo, rows/columns, %, cell colour (automation-tested; manual mouse/keyboard check pending) |
 | Datasheet in Excel (optional): live, closing never prompts | ✅ |
 | Selection glow + tiny "rethink chart" label, document untouched | ✅ |
 | ▲▼ handles per segment: click = one step (step follows the precision of the entered value) | ✅ |
-| Drag handles to change values quickly (live, frozen scale, step by entered precision, `e` locked, Esc cancels, one undo entry) | 🟡 implemented; engine unit-tested, add-in not yet built/run on Windows |
+| Drag handles to change values quickly (live, frozen scale, step by entered precision, `e` locked, Esc cancels, one undo entry) | ✅ (automation-tested in PowerPoint; ◀▶ when horizontal) |
 | Glow follows the chart **while** it is being moved (hidden while resizing) | 🟡 implemented (mouse hook); manual check on Windows pending |
 | In-place updates keep user formatting | ✅ |
 | Resize with the mouse re-lays out the chart | ✅ |
 | `.ppttc` fills rethink elements (`RETHINK_MODEL`) and placeholders | ✅ CLI |
+| Gantt: drag bar ends/bars/milestones in days with snapping and date tooltip, drag scale ends, calendar (double-click), context menu (rows, new items, scales, display) | ✅ (automation + real mouse tested) |
 
 ## Slice plan
 
 1. ✅ Waterfall + data table (engine, OOXML output, `.ppttc`, tests)
 2. ✅ Add-in: insert, datasheet, overlay, handles, in-place updates
-3. 🟡 Drag handles, glow follows move, insert menu with all types + orientation, build-down waterfall ← current
-4. ⬜ Gantt (calendar scale, bars, milestones, drag in days, datasheet)
+3. ✅ Drag handles, glow follows move (manual check pending), insert menu with all types + orientation, build-down waterfall
+4. ✅ Gantt (calendar scale, bars, milestones, drag in days, datasheet) – remaining details in HANDOFF.md ← user testing
 5. ⬜ Stacked, 100% and clustered columns incl. totals, value axis and legend
 6. ⬜ Line, area, combination
 7. ⬜ Mekko (% and units)

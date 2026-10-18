@@ -22,9 +22,9 @@ struct DatasheetCallbacks {
 
 class Datasheet;
 
-// beside: Bildschirmrechteck des Diagramms (das Fenster erscheint daneben).
+// beside: Bildschirmrechteck des Diagramms (das Fenster erscheint daneben). hint: Hinweiszeile unten (leer = Vorgabe).
 Datasheet* openDatasheetWindow(HWND owner, const std::wstring& title, std::vector<Row> table, const std::wstring& decimalSeparator,
-                               DatasheetCallbacks callbacks, const RECT& beside, bool show);
+                               DatasheetCallbacks callbacks, const RECT& beside, bool show, const std::wstring& hint = L"");
 void datasheetSetTable(Datasheet* sheet, std::vector<Row> table);  // von außen geändert (z. B. ▲▼), ohne Rückmeldung
 void datasheetActivate(Datasheet* sheet);
 void datasheetClose(Datasheet* sheet);

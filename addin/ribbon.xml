@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui" onLoad="RethinkRibbonLoad">
   <ribbon>
     <tabs>
       <tab id="rethinkTab" label="rethink">
@@ -10,19 +10,27 @@
                   supertip="Wählt eine .ppttc-Datei, erzeugt daraus eine neue Präsentation und öffnet sie."/>
         </group>
         <group id="rethinkGroupCharts" label="Diagramme">
-          <button id="rethinkWaterfall" size="large" imageMso="ChartInsert" onAction="RethinkInsertWaterfall"
-                  label="Wasserfall einfügen"
+          <button id="rethinkGallery" size="large" imageMso="ChartInsert" onAction="RethinkInsertGallery"
+                  label="Diagramm einfügen"
+                  screentip="Diagramm einfügen"
+                  supertip="Zeigt alle Diagrammtypen. Pfeile um ein Symbol wählen die Ausrichtung; ausgegraute Typen sind in rethink noch nicht umgesetzt."/>
+          <button id="rethinkWaterfall" imageMso="ChartInsert" onAction="RethinkInsertWaterfall"
+                  label="Wasserfall"
                   screentip="Wasserfall einfügen"
-                  supertip="Fügt einen rethink-Wasserfall mit Datentabelle ein und öffnet sein Datenblatt in Excel. Jedes Speichern (Strg+S) im Datenblatt zeichnet das Diagramm neu. „e“ in einer Zelle ist eine berechnete Summe."/>
+                  supertip="Fügt einen rethink-Wasserfall mit Datentabelle ein. „e“ in einer Zelle ist eine berechnete Summe. Werte ändern: ▲▼ am Segment klicken oder ziehen, Datenblatt über das Symbol unten rechts oder per Doppelklick."/>
+          <button id="rethinkGantt" imageMso="DateAndTimeInsert" onAction="RethinkInsertGantt"
+                  label="Gantt / Zeitplan"
+                  screentip="Gantt-Diagramm einfügen"
+                  supertip="Fügt einen Zeitplan für den aktuellen und die zwei folgenden Monate ein. Balken und Meilensteine ziehen, Skalenenden ziehen, Doppelklick auf die Skala öffnet den Kalender, Rechtsklick → rethink-Zeitplan für Zeilen, Elemente und Anzeige."/>
           <button id="rethinkDatasheet" size="large" imageMso="TableExcelSpreadsheetInsert" onAction="RethinkOpenDatasheet"
                   label="Datenblatt öffnen"
                   screentip="Datenblatt öffnen"
-                  supertip="Öffnet das Datenblatt des ausgewählten rethink-Diagramms in Excel (auch per Doppelklick auf das Diagramm). Speichern übernimmt die Änderungen."/>
+                  supertip="Öffnet das Datenblatt des ausgewählten rethink-Diagramms (auch über das Symbol unten rechts oder per Doppelklick). Jede Eingabe zeichnet das Diagramm sofort neu."/>
         </group>
         <group id="rethinkGroupElements" label="Elemente">
           <button id="rethinkChart" size="large" imageMso="ChartInsert" onAction="RethinkInsertChart"
-                  label="Diagramm einfügen"
-                  screentip="Diagramm einfügen"
+                  label="Natives Diagramm"
+                  screentip="Natives Diagramm einfügen"
                   supertip="Fügt auf der aktuellen Folie ein natives Säulendiagramm ein und benennt es Chart1, Chart2 … – unter diesem Namen füllt rethink es aus einer .ppttc-Datei."/>
           <button id="rethinkName" size="large" imageMso="SelectionPane" onAction="RethinkSetName"
                   label="Elementname setzen"
@@ -32,4 +40,8 @@
       </tab>
     </tabs>
   </ribbon>
+  <contextMenus>
+    <contextMenu idMso="ContextMenuObjectsGroup"><!--rethink:gantt-menu a--></contextMenu>
+    <contextMenu idMso="ContextMenuShape"><!--rethink:gantt-menu b--></contextMenu>
+  </contextMenus>
 </customUI>

@@ -617,6 +617,7 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
     for (int r = kFirstActivityRow; r < static_cast<int>(item.table.size()); ++r) d.rows.push_back({r, L.rowsTop + (r - kFirstActivityRow) * L.rowH, L.rowH});
     d.rows.push_back({kMilestoneRow, L.msTop, L.msRowH});
     d.scaleTop = b.y, d.scaleBottom = L.rowsTop;
+    d.scales = scales;
     d.axis = a;
     return d;
 }

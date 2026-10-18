@@ -1,5 +1,6 @@
 #pragma once
 
+#include "engine/options.h"
 #include "util.h"
 
 #include <string>
@@ -12,9 +13,20 @@ namespace rethink::addin {
 // nach ihrer Rolle ("segment r1 c3", "connector c2" …). Wertänderungen passen die vorhandenen Formen
 // an Ort und Stelle an, sodass eigene Formatierungen (Farben, Schrift) erhalten bleiben.
 
-// Fügt auf der aktuellen Folie einen Wasserfall mit Beispieldaten und Datentabelle ein und wählt ihn aus.
+// Einfügbare Elemente (Einfügemenü); nicht umgesetzte Typen erscheinen dort ausgegraut.
+enum class ElementKind { Waterfall, WaterfallDown, Gantt };
+
+// Fügt auf der aktuellen Folie ein Element mit Beispieldaten ein und wählt es aus. Ausrichtung nur für Säulendiagramme.
 // Mit openSheet öffnet sich danach das Datenblatt. Liefert den Elementnamen.
+std::wstring insertElement(IDispatch* app, ElementKind kind, engine::Orientation orientation, bool openSheet);
 std::wstring insertWaterfall(IDispatch* app, bool openSheet);
+
+// Art eines Elements: "waterfall" oder "gantt" und die Richtung wachsender Werte (Säulendiagramme).
+struct ElementInfo {
+    bool gantt = false;
+    engine::Orientation direction = engine::Orientation::Up;
+};
+ElementInfo elementInfo(IDispatch* element);
 
 // Öffnet das eingebaute Datenblatt des ausgewählten Elements (Fenster im Tabellen-Look neben dem Diagramm).
 // Jede Eingabe zeichnet das Diagramm sofort neu; Schließen genügt. Mit show=false unsichtbar (Tests).
@@ -66,6 +78,58 @@ void endSegmentDrag();
 // Zeichnet das Element neu, wenn seine Größe seit dem letzten Zeichnen geändert wurde. Liefert true bei Neuzeichnen.
 bool relayoutIfResized(IDispatch* element);
 
+// ---- Zeitplan (Gantt) ----
+
+// Ziehbare Formen eines Zeitplans (Folienpunkte) und das Band der Kalenderskalen.
+struct GanttShape {
+    std::string role, flags;  // flags: "bar", "milestone", "bracket", "shade"
+    double left = 0, top = 0, width = 0, height = 0;
+};
+struct GanttGeometry {
+    bool valid = false;
+    std::vector<GanttShape> shapes;
+    double plotLeft = 0, plotRight = 0, scaleTop = 0, scaleBottom = 0;
+};
+GanttGeometry ganttGeometryOf(IDispatch* element);
+
+// Ziehen am ausgewählten Zeitplan. grip: 0 = Anfang, 1 = Ende, 2 = verschieben; role "range" = sichtbarer Bereich
+// (grip 0/1). pointsPerPixel: Folienpunkte je Bildschirmpixel (Rasterung: nicht feiner als ~3 Pixel).
+// Ein Rückgängig-Eintrag für das ganze Ziehen. Liefert die Kurzinfo zu Beginn.
+std::wstring beginGanttDrag(IDispatch* app, const std::string& role, int grip, double pointsPerPixel);
+// Mausweg dx (Folienpunkte). Formen werden an Ort und Stelle angepasst (Bereich: erst beim Loslassen).
+// Liefert true, wenn sich die Daten geändert haben; geometry/tooltip enthalten dann den neuen Stand.
+bool ganttDragTo(double dx, GanttGeometry& geometry, std::wstring& tooltip);
+// Übernimmt (oder verwirft bei cancel) das Ziehen und führt offene Datenblätter nach.
+void endGanttDrag(bool cancel);
+
+// Was liegt an einem Punkt (Folienpunkte) eines Zeitplans: Zeile, Datum, Form, Skalenband.
+struct GanttHit {
+    bool valid = false;
+    int row = -1;         // "table"-Index (1 = Meilensteinzeile), -1 = keine Zeile
+    double date = 0;      // Tage seit 1970
+    bool hasDate = false;
+    std::string role;     // ziehbare Form unter dem Punkt (leer = keine)
+    bool inScale = false; // im Band der Kalenderskalen
+};
+GanttHit ganttHitAt(IDispatch* element, double x, double y);
+
+// Befehle aus dem Kontextmenü (Steuerelement-ID des Ribbons, z. B. "rtkG_insertRow") am ausgewählten Zeitplan;
+// hit: Mausposition beim Öffnen des Menüs.
+void ganttCommand(IDispatch* app, const std::wstring& id, const GanttHit& hit);
+// Umschalter im Kontextmenü (z. B. "rtkT_separators"): Zustand lesen bzw. setzen.
+bool ganttPressed(IDispatch* app, const std::wstring& id, const GanttHit& hit);
+void ganttToggle(IDispatch* app, const std::wstring& id, bool pressed, const GanttHit& hit);
+
+// Kalender (Doppelklick auf Skala oder Element, Kontextmenü): role leer = sichtbarer Bereich.
+void openGanttCalendar(IDispatch* app, const std::string& role);
+// Für Tests: Bereich bzw. Daten eines Elements setzen wie im Kalender (ISO, beide Tage eingeschlossen).
+void setGanttDates(IDispatch* app, const std::string& role, const std::wstring& first, const std::wstring& last);
+// Für Tests: Ziele des ausgewählten Zeitplans mit ihren Daten ("bar r2=2026-11-02..2026-11-20; …").
+std::wstring ganttTargets(IDispatch* app);
+
+// Form innerhalb des Elements auswählen (Klick auf einen Balken: wie PowerPoints zweiter Klick in eine Gruppe).
+void selectInnerShape(IDispatch* element, const std::string& role);
+
 int watchCount();
 void stopDatasheetWatch();
 
@@ -73,6 +137,7 @@ void stopDatasheetWatch();
 ComPtr<IDispatch> rethinkElementOf(IDispatch* selection);
 
 void commandInsertWaterfall(IDispatch* app);
+void commandInsertElement(IDispatch* app, ElementKind kind, engine::Orientation orientation);
 void commandOpenDatasheet(IDispatch* app);
 
 }  // namespace rethink::addin

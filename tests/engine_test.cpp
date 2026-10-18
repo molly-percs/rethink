@@ -175,6 +175,7 @@ void testCellInput() {
     check(approx(parseCellInput(L"-3", de).number, -3), "Eingabe: -3");
     check(kindIs(L"8,1 %", CellKind::Percentage) && approx(parseCellInput(L"8,1 %", de).number, 8.1), "Eingabe: 8,1 %");
     check(parseCellInput(L"01.03.2024", de).text == L"2024-03-01" && kindIs(L"2024-03-01", CellKind::Date), "Eingabe: Datum");
+    check(parseCellInput(L"1.3.26", de).text == L"2026-03-01" && kindIs(L"1.3.26", CellKind::Date), "Eingabe: Datum mit zweistelligem Jahr");
     check(kindIs(L"Umsatz", CellKind::String) && kindIs(L"12a", CellKind::String), "Eingabe: Text");
     check(displayCell(parseCellInput(L"12,5", de), de) == L"12,5", "Anzeige: 12,5");
     check(displayCell(parseCellInput(L"48%", de), de) == L"48%", "Anzeige: 48%");

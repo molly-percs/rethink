@@ -6,8 +6,10 @@
 
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 
@@ -70,9 +72,25 @@ int wmain(int argc, wchar_t** argv) {
         const std::wstring text = xml ? xml : L"";
         expect(text.find(L"label=\"rethink\"") != std::wstring::npos, "Ribbon-XML: Tab \"rethink\"");
         expect(text.find(L"Aus .ppttc erzeugen…") != std::wstring::npos, "Ribbon-XML: Umlaute/Auslassung korrekt (UTF-8)");
-        for (const wchar_t* cb : {L"RethinkBuild", L"RethinkInsertChart", L"RethinkSetName", L"RethinkInsertWaterfall", L"RethinkOpenDatasheet"})
+        for (const wchar_t* cb : {L"RethinkBuild", L"RethinkInsertChart", L"RethinkSetName", L"RethinkInsertWaterfall", L"RethinkOpenDatasheet",
+                                  L"RethinkInsertGallery", L"RethinkInsertGantt", L"RethinkGanttAction", L"RethinkGanttToggle"})
             expect(text.find(std::wstring(L"onAction=\"") + cb + L"\"") != std::wstring::npos && idOf(dispatch.Get(), cb) != DISPID_UNKNOWN,
                    "Rückruf im XML und per GetIDsOfNames auflösbar");
+        for (const wchar_t* cb : {L"RethinkGanttVisible", L"RethinkGanttPressed"})
+            expect(text.find(cb) != std::wstring::npos && idOf(dispatch.Get(), cb) != DISPID_UNKNOWN, "get-Rückruf im XML und auflösbar");
+        expect(text.find(L"<!--rethink:gantt-menu") == std::wstring::npos && text.find(L"id=\"rtkGantt_a\"") != std::wstring::npos &&
+                   text.find(L"id=\"rtkGantt_b\"") != std::wstring::npos && text.find(L"id=\"rtkG_insertRow_b\"") != std::wstring::npos,
+               "Kontextmenü „rethink-Zeitplan“ in beiden PowerPoint-Kontextmenüs, IDs eindeutig");
+        {
+            // Steuerelement-IDs müssen eindeutig sein
+            std::vector<std::wstring> ids;
+            for (size_t at = text.find(L" id=\""); at != std::wstring::npos; at = text.find(L" id=\"", at + 1)) {
+                const size_t end = text.find(L'"', at + 5);
+                ids.push_back(text.substr(at + 5, end - at - 5));
+            }
+            std::sort(ids.begin(), ids.end());
+            expect(std::adjacent_find(ids.begin(), ids.end()) == ids.end() && ids.size() > 60, "alle Steuerelement-IDs eindeutig");
+        }
         SysFreeString(xml);
         SysFreeString(id);
 

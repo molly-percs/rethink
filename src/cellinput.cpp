@@ -60,11 +60,13 @@ Cell parseCellInput(const std::wstring& raw, const std::wstring& decimalSeparato
         return cell;
     }
     std::wsmatch m;
-    static const std::wregex german(LR"(^(\d{1,2})\.(\d{1,2})\.(\d{4})$)");
+    static const std::wregex german(LR"(^(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})$)");  // 01.03.2024 oder 1.3.24
     static const std::wregex iso(LR"(^(\d{4})-(\d{1,2})-(\d{1,2})$)");
     if (std::regex_match(text, m, german) || std::regex_match(text, m, iso)) {
         const bool isIso = text.find(L'-') != std::wstring::npos;
-        const int y = std::stoi(m[isIso ? 1 : 3].str()), mo = std::stoi(m[2].str()), d = std::stoi(m[isIso ? 3 : 1].str());
+        int y = std::stoi(m[isIso ? 1 : 3].str());
+        if (!isIso && m[3].length() == 2) y += 2000;
+        const int mo = std::stoi(m[2].str()), d = std::stoi(m[isIso ? 3 : 1].str());
         if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
             cell.kind = CellKind::Date;
             cell.text = std::format(L"{:04}-{:02}-{:02}", y, mo, d);
