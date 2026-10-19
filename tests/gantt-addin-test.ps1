@@ -312,13 +312,16 @@ try {
     Expect ($hov -match '^waagerecht zeile=4 band=') "Hover zwischen zwei Zeilen: waagerechtes Band ($hov)"
     $hc = $api.GanttHover($xl, $rowsTop + $rowH / 2)   # Zeilenmitte der ersten Aktivitätszeile (fern von PowerPoints Anfassern)
     Expect ($hc -notmatch 'waagerecht' -and $hc -match 'griff=zelle r2 c\d') "Hover in der Zeilenmitte: kein Band, dafür leuchtet die Zelle ($hc)"
-    Expect ($api.GanttHover($g.Left - 19 * $ptPerPx, $yB + $rowH / 2) -match 'griff=zeile activity r4') 'Hover am Zeilengriff'
+    Expect ($api.GanttHover($g.Left - 21 * $ptPerPx, $yB + $rowH / 2) -match 'griff=zeile activity r4' -and $api.GanttHover($g.Left - 30 * $ptPerPx, $yB + $rowH / 2) -match 'griff=zeile activity r4') 'Hover am Zeilengriff (~20 px breit)'
     $e = $edges[2]; $yMid = $rowsTop + $rowH / 2
     Expect ($api.GanttHover($e.X, $yMid) -match "^senkrecht datum=$($e.Date) band=") "Hover an einer Skalengrenze: senkrechtes Band ($($e.Date))"
     $hit = $api.GanttHit($e.X, $yMid)
     Expect ($hit -match "trenndatum=$($e.Date)" -and $api.GanttHit($xl, $yB) -match 'trennzeile=4') "Treffer enthält die Grenze ($hit)"
-    $far = $api.GanttHover($e.X, $rowsTop - 6 * $ptPerPx)   # über den Zeilen (im Skalenband) gehört die Grenze nicht dazu
-    Expect ($far -notmatch 'senkrecht') "im Skalenband kein Band ($far)"
+    $scaleTop = [double]::Parse($tok[2], $inv) + $dy
+    $inScale = $api.GanttHover($e.X, $scaleTop + 4 * $ptPerPx)   # die Grenze reicht hinauf in das Skalenband
+    Expect ($inScale -match "^senkrecht datum=$($e.Date) band=") "im Skalenband: senkrechtes Band ($inScale)"
+    Expect ($api.GanttHover($e.X, $scaleTop - 8 * $ptPerPx) -notmatch 'senkrecht') 'über dem Skalenband kein Band'
+    Expect ($api.GanttMenu($e.X, $scaleTop + 4 * $ptPerPx) -match "Senkrechte Trennlinie hier einfügen=dateLine=$($e.Date)") 'Menü im Skalenband an der Grenze: Senkrechte Trennlinie hier einfügen'
     $menu = $api.GanttMenu($xl, $yB)
     Expect ($menu -match 'Waagerechte Trennlinie hier einfügen=rowLine=4' -and $menu -notmatch 'Senkrechte Trennlinie') 'Menü an der Zeilengrenze: Waagerechte Trennlinie hier einfügen'
     Expect ($api.GanttMenu($e.X, $yMid) -match "Senkrechte Trennlinie hier einfügen=dateLine=$($e.Date)") 'Menü an der Skalengrenze: Senkrechte Trennlinie hier einfügen'
@@ -361,7 +364,23 @@ try {
     Expect ($r -eq 'Hinweis' -and ((Roles $slide.Shapes.Item($name)) -contains 'remark r2') -and $api.DatasheetCell(2, 5) -eq 'Hinweis') 'Eintrag in leerer Spalte erscheint im Diagramm und im Datenblatt'
     $api.GanttCommand('cell=2|0|Analyse')
     Expect ($api.DatasheetCell(2, 0) -eq 'Analyse') 'Befehl cell=Zeile|Spalte|Text'
+    # Eingabefeld offen, dann wechselt die Auswahl (Klick auf eine andere Form / die leere Folie): getippter Text geht nicht verloren
+    $c1 = [char]1
+    $slide.Shapes.Item($name).Select(); Start-Sleep -Milliseconds 400
+    $r = $api.GanttEditCell($act.X + $act.W / 2, $rowsTop + $rowH / 2, "${c1}Verloren?")
+    Expect ($r -eq 'Analyse' -and $api.OverlayInfo() -match 'editor=True') "Eingabefeld bleibt mit getipptem Text offen ($r)"
+    $other = $slide.Shapes.AddTextbox(1, 5, 5, 60, 20); $other.Select(); Start-Sleep -Milliseconds 500
+    Expect ($api.OverlayInfo() -match 'editor=False' -and $api.DatasheetCell(2, 0) -eq 'Verloren?' -and $slide.Shapes.Item($name).GroupItems.Item('activity r2').TextFrame.TextRange.Text -eq 'Verloren?') 'Auswahlwechsel bei offenem Eingabefeld übernimmt den Text'
+    $other.Delete(); $slide.Shapes.Item($name).Select(); Start-Sleep -Milliseconds 400
+    $api.GanttCommand('cell=2|0|Analyse')
     $api.CloseDatasheet()
+    # Zeitplan mit offenem Eingabefeld wird gelöscht: der Text kann nirgends mehr hin, das geschieht leise
+    $g = $slide.Shapes.Item($name)
+    $dup = $g.Duplicate().Item(1); $dup.Select(); Start-Sleep -Milliseconds 400
+    $sx = $dup.Left - $g.Left; $sy = $dup.Top - $g.Top
+    [void]$api.GanttEditCell($act.X + $sx + $act.W / 2, $rowsTop + $sy + $rowH / 2, "${c1}weg")
+    $dup.Delete(); Start-Sleep -Milliseconds 400
+    Expect ($api.OverlayInfo() -match 'editor=False' -and $slide.Shapes.Item($name).GroupItems.Item('activity r2').TextFrame.TextRange.Text -eq 'Analyse') 'Zeitplan mit offenem Eingabefeld gelöscht: Feld zu, nichts passiert'
     $slide.Shapes.Item($name).Select()
 
     # 15. Bild

@@ -73,21 +73,29 @@ POINT g_menuAt{};
 UINT_PTR g_menuTimer = 0;
 bool g_inMenu = false;
 
-// Grenze unter der Maus (zwischen Zeilen / Skaleneinheiten): helles Band, Bildschirmpixel; Beschreibung für Tests
-RECT g_hoverLine{};
-std::wstring g_hoverText;
+// Grenze unter der Maus: zwischen zwei Aktivitätszeilen (waagerecht) oder an einer Einheit der feinsten Skala (senkrecht),
+// höchstens ~4 Bildschirmpixel entfernt; die nähere gewinnt. Band in Bildschirmpixeln, Text und Grenze für Tests und Rechtsklick.
+struct Boundary {
+    RECT band{};
+    std::wstring text;
+    int row = -1;           // waagerecht: Tabellenzeile unter der Grenze
+    bool hasDate = false;   // senkrecht: Beginn des Tages
+    double date = 0;
+};
+// Hell hervorgehobene Grenze unter der Maus; das Rechtsklick-Menü arbeitet genau an dieser Grenze
+Boundary g_hover;
+std::wstring g_menuInfo;  // Grenze des zuletzt geöffneten Menüs (für Tests)
 
-void closeEditor(bool commit, int move);
+void closeEditor(bool commit, int move, bool refresh);
 
 void stopTracking() {
-    closeEditor(false, 0);  // offenes Eingabefeld einer Zelle verwerfen
+    closeEditor(true, 0, false);  // offenes Eingabefeld: getippter Text geht nie verloren (nur Esc verwirft)
     g_follow = Follow::None;
     g_element.Reset();
     g_segments.clear();
     g_gantt = {};
     g_tooltip.clear();
-    g_hoverLine = {};
-    g_hoverText.clear();
+    g_hover = {};
     g_cachedWidth = -1;
     g_shown = {};
     hideOverlay();
@@ -141,6 +149,34 @@ Mapping mappingOf(IDispatch* app) {
 Mapping currentMapping() { return mappingOf(g_app.Get()); }
 
 Mapping g_overlayMap;  // Abbildung beim letzten Aufbau des Overlays: Hover ohne COM-Aufrufe bei jeder Mausbewegung
+
+// Eingabefeld einer Beschriftungszelle (siehe unten)
+struct Editor {
+    HWND hwnd = nullptr;
+    WNDPROC oldProc = nullptr;
+    HFONT font = nullptr;
+    int row = 0, col = 0;
+    std::wstring original;
+    bool closing = false;
+    ComPtr<IDispatch> element;  // Zeitplan, zu dem die Zelle gehört (unabhängig von der aktuellen Auswahl)
+    Mapping map;                // Abbildung beim Öffnen: ändert sie sich (Bildlauf, Zoom), wird übernommen und geschlossen
+};
+Editor g_editor;
+
+// Noch nicht in die Zelle geschriebener Text. Wird beim Fokusverlust sofort festgehalten: bis die gepostete Nachricht ankommt,
+// kann PowerPoints Auswahlwechsel das Eingabefeld schon geschlossen haben.
+struct PendingCommit {
+    bool valid = false;
+    std::wstring text;
+    int row = 0, col = 0;
+    ComPtr<IDispatch> element;
+};
+PendingCommit g_pending;
+
+bool sameMapping(const Mapping& a, const Mapping& b) {
+    return std::fabs(a.ax - b.ax) < 1e-9 && std::fabs(a.ay - b.ay) < 1e-9 && std::fabs(a.bx - b.bx) < 0.5 && std::fabs(a.by - b.by) < 0.5;
+}
+
 
 // PowerPoints eigene Anfasser (8 Größenpunkte + Drehpunkt) dürfen nicht von Griffen verdeckt werden.
 bool hitsGrip(const RECT& r, const RECT& e) {
@@ -235,7 +271,7 @@ void addGanttHandles(OverlayContent& c, const Mapping& m) {
         const RECT area{labelsL, y0, plotL - scaled(3), y1};
         OverlayHandle rowGrip;
         const long gx = std::min<long>(labelsL, c.element.left);  // außerhalb von PowerPoints Anfassern am Rand
-        rowGrip.rect = {gx - scaled(26), y0, gx - scaled(12), y1};
+        rowGrip.rect = {gx - scaled(32), y0, gx - scaled(10), y1};  // ~22 px breit: leicht zu treffen, Symbol und Punkte passen hinein
         rowGrip.action = OverlayAction::RowMove, rowGrip.style = HandleStyle::RowGrip, rowGrip.dirX = 0, rowGrip.dirY = 1, rowGrip.area = area;
         rowGrip.row = row;
         rowGrip.role = std::format("activity r{}", row);
@@ -287,7 +323,7 @@ OverlayContent buildContent(double left, double top, double width, double height
         c.tooltipAt = {cursor.x, c.element.top - scaled(4)};
     }
     c.marker = g_marker;
-    c.line = g_hoverLine;
+    c.line = g_hover.band;
     return c;
 }
 
@@ -303,7 +339,6 @@ bool sameContent(const OverlayContent& a, const OverlayContent& b) {
 void onOverlayAction(const OverlayHandle& handle, OverlayGesture gesture, int pixels, bool shift);
 void updateLineHover(POINT p);
 void openCellEditor(const OverlayHandle& handle);
-void closeEditor(bool commit, int move);
 
 void readTargets() {
     g_info = elementInfo(g_element.Get());
@@ -380,6 +415,7 @@ void CALLBACK onTrack(HWND, UINT, UINT_PTR, DWORD) {
         POINT cursor{};
         GetCursorPos(&cursor);
         updateLineHover(cursor);  // verschwindet, wenn die Maus das Diagramm oder PowerPoint verlassen hat
+        if (g_editor.hwnd && !sameMapping(currentMapping(), g_editor.map)) closeEditor(true, 0, false);  // Bildlauf oder Zoom: Feld säße falsch
         track();
     } catch (const std::exception& e) {
         remember("Nachführen", e);
@@ -408,8 +444,7 @@ int gripOf(OverlayAction a) {
 void beginDrag(const OverlayHandle& handle) {
     g_dragging = true;
     g_drag = {};
-    g_hoverLine = {};
-    g_hoverText.clear();
+    g_hover = {};
     const Mapping m = currentMapping();
     if (handle.action == OverlayAction::RowMove) {
         g_drag.kind = DragKind::Row;
@@ -627,15 +662,46 @@ void inMenu(F&& body) {
 // nächsten Beschriftungsspalte der Zeile (Umschalt+Tab zur vorigen), Esc verwirft, Fokusverlust übernimmt.
 constexpr UINT kMsgEditorDone = WM_APP + 60;  // wParam = 1 übernehmen / 0 verwerfen, lParam = Sprung (-1, 0, +1)
 
-struct Editor {
-    HWND hwnd = nullptr;
-    WNDPROC oldProc = nullptr;
-    HFONT font = nullptr;
-    int row = 0, col = 0;
-    std::wstring original;
-    bool closing = false;
-};
-Editor g_editor;
+// Hält den Text des Eingabefelds fest, falls er sich geändert hat
+void captureEditor() {
+    g_pending = {};
+    if (!g_editor.hwnd) return;
+    const int length = GetWindowTextLengthW(g_editor.hwnd);
+    std::wstring text(static_cast<size_t>(length) + 1, L'\0');
+    text.resize(static_cast<size_t>(GetWindowTextW(g_editor.hwnd, text.data(), length + 1)));
+    if (text != g_editor.original) g_pending = {true, std::move(text), g_editor.row, g_editor.col, g_editor.element};
+}
+
+// Schreibt den festgehaltenen Text in seine Zelle (nur diese Daten, nicht g_editor/g_element). Ein inzwischen gelöschter
+// Zeitplan wird leise übergangen. refresh = Overlay danach neu setzen.
+void commitPending(bool refresh) {
+    PendingCommit p = std::move(g_pending);
+    g_pending = {};
+    if (!p.valid || !g_app || !p.element) return;
+    try {
+        disp::call(p.element.Get(), L"Id");
+    } catch (...) {
+        return;
+    }
+    const bool was = g_acting;
+    g_acting = true;  // eigene Änderung: Auswahlereignisse nicht verarbeiten
+    try {
+        ganttSetCell(g_app.Get(), p.element.Get(), p.row, p.col, p.text);
+    } catch (const winrt::hresult_error& e) {
+        MessageBoxW(powerPointWindow(), e.message().c_str(), L"rethink", MB_ICONINFORMATION);
+    } catch (const std::exception& e) {
+        MessageBoxW(powerPointWindow(), widen(e.what()).c_str(), L"rethink", MB_ICONINFORMATION);
+    } catch (...) {
+    }
+    g_acting = was;
+    if (!refresh || !g_element) return;
+    try {
+        track();
+        if (g_element) placeOverlay(true);
+    } catch (...) {
+        stopTracking();
+    }
+}
 
 LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
@@ -648,51 +714,68 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             if (wParam == VK_RETURN || wParam == VK_TAB || wParam == VK_ESCAPE) return 0;  // kein Signalton
             break;
         case WM_KILLFOCUS:
-            if (!g_editor.closing) PostMessageW(hwnd, kMsgEditorDone, 1, 0);  // Fokusverlust übernimmt
+            if (!g_editor.closing) {  // Fokusverlust übernimmt: Text jetzt festhalten, die Übernahme folgt gepostet
+                captureEditor();
+                PostMessageW(hwnd, kMsgEditorDone, 1, 0);
+            }
             break;
-        case kMsgEditorDone: closeEditor(wParam != 0, static_cast<int>(lParam)); return 0;
+        case kMsgEditorDone:
+            if (g_editor.hwnd == hwnd) closeEditor(wParam != 0, static_cast<int>(lParam), true);
+            else commitPending(true);
+            return 0;
     }
     return CallWindowProcW(g_editor.oldProc, hwnd, message, wParam, lParam);
 }
 
 void openCellEditor(const OverlayHandle& handle) {
     if (!g_app || !g_element) return;
-    closeEditor(true, 0);
+    closeEditor(true, 0, true);
     const GanttCellInfo info = ganttCellInfo(g_element.Get(), handle.row, handle.column);
     const RECT cell = IsRectEmpty(&handle.cell) ? handle.rect : handle.cell;
-    const int width = std::max<int>(cell.right - cell.left, scaled(60)), height = cell.bottom - cell.top;
     const int fontPx = std::max(8, static_cast<int>(std::lround(info.fontPt * std::fabs(g_overlayMap.ax))));  // Schriftgröße × Zoom
+    HFONT font = CreateFontW(-fontPx, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                             DEFAULT_PITCH, info.fontName.empty() ? L"Segoe UI" : info.fontName.c_str());
+    // Höhe = Zeilenhöhe der Schrift + Rand oben und unten, senkrecht mittig in der Zelle
+    TEXTMETRICW metrics{};
+    HDC dc = GetDC(nullptr);
+    HGDIOBJ old = SelectObject(dc, font);
+    GetTextMetricsW(dc, &metrics);
+    SelectObject(dc, old);
+    ReleaseDC(nullptr, dc);
+    const int marginX = fontPx / 3, marginY = std::max(2, fontPx / 5);
+    const int width = std::max<int>(cell.right - cell.left, scaled(60)), height = metrics.tmHeight + 2 * marginY;
+    const int top = cell.top + (cell.bottom - cell.top - height) / 2;
     g_editor = {};
-    g_editor.row = handle.row, g_editor.col = handle.column, g_editor.original = info.text;
-    g_editor.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, L"EDIT", info.text.c_str(), WS_POPUP | WS_VISIBLE | ES_AUTOHSCROLL | ES_LEFT, cell.left, cell.top, width,
-                                    height, powerPointWindow(), nullptr, GetModuleHandleW(nullptr), nullptr);
-    if (!g_editor.hwnd) return;
-    g_editor.font = CreateFontW(-fontPx, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                DEFAULT_PITCH, L"Segoe UI");
+    g_editor.row = handle.row, g_editor.col = handle.column, g_editor.original = info.text, g_editor.element = g_element, g_editor.map = g_overlayMap;
+    // ES_MULTILINE nur, damit der Text senkrecht im Feld sitzt (EM_SETRECT); Enter und Tab fängt editorProc ab
+    g_editor.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, L"EDIT", info.text.c_str(), WS_POPUP | WS_VISIBLE | ES_MULTILINE | ES_AUTOHSCROLL | ES_LEFT, cell.left,
+                                    top, width, height, powerPointWindow(), nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!g_editor.hwnd) {
+        DeleteObject(font);
+        g_editor = {};
+        return;
+    }
+    g_editor.font = font;
     SendMessageW(g_editor.hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(g_editor.font), TRUE);
-    SendMessageW(g_editor.hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(fontPx / 3, fontPx / 3));
+    const RECT text{marginX, marginY, width - marginX, height - marginY};
+    SendMessageW(g_editor.hwnd, EM_SETRECTNP, 0, reinterpret_cast<LPARAM>(&text));
     g_editor.oldProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(g_editor.hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(editorProc)));
     SetFocus(g_editor.hwnd);
     SendMessageW(g_editor.hwnd, EM_SETSEL, 0, -1);  // alles markiert: Tippen ersetzt
 }
 
 // Eingabefeld schließen; commit übernimmt den Text in die Zelle (nur bei Änderung), move springt zur Nachbarspalte derselben Zeile.
-void closeEditor(bool commit, int move) {
+// refresh = Overlay danach neu setzen (nicht innerhalb eines Auswahlwechsels).
+void closeEditor(bool commit, int move, bool refresh) {
     if (!g_editor.hwnd || g_editor.closing) return;
     g_editor.closing = true;
-    const int length = GetWindowTextLengthW(g_editor.hwnd);
-    std::wstring text(static_cast<size_t>(length) + 1, L'\0');
-    text.resize(static_cast<size_t>(GetWindowTextW(g_editor.hwnd, text.data(), length + 1)));
-    const int row = g_editor.row, col = g_editor.col;
-    const bool changed = commit && text != g_editor.original;
+    if (commit) captureEditor();
+    else g_pending = {};
+    const int col = g_editor.col, row = g_editor.row;
     DestroyWindow(g_editor.hwnd);
     if (g_editor.font) DeleteObject(g_editor.font);
     g_editor = {};
-    if (!g_app || !g_element) return;
-    if (changed) {
-        ComPtr<IDispatch> element = g_element;
-        inMenu([&] { ganttSetCell(g_app.Get(), element.Get(), row, col, text); });
-    }
+    commitPending(refresh);
     if (move == 0 || !g_element || !g_gantt.valid) return;
     for (size_t i = 0; i < g_gantt.columns.size(); ++i) {
         if (g_gantt.columns[i].col != col) continue;
@@ -741,6 +824,7 @@ void openMenuAt(const ComPtr<IDispatch>& element, POINT at) {
     hideRadialMenu();
     bool radial = false;
     GanttHit hit;
+    const Boundary lit = g_hover;  // vor dem Menü merken: währenddessen verschwindet das Leuchten
     inMenu([&] {
         if (!g_element || disp::call(g_element.Get(), L"Id").toLong() != disp::call(element.Get(), L"Id").toLong()) {
             disp::call(element.Get(), L"Select");  // Rechtsklick auf einen nicht ausgewählten Zeitplan wählt ihn aus
@@ -748,7 +832,13 @@ void openMenuAt(const ComPtr<IDispatch>& element, POINT at) {
             placeOverlay(true);
         }
         const Mapping m = currentMapping();
-        hit = ganttHitAt(element.Get(), m.pointX(at.x), m.pointY(at.y), 3.0 / std::max(std::fabs(m.ax), 1e-6));  // Grenzen: ~3 Pixel
+        hit = ganttHitAt(element.Get(), m.pointX(at.x), m.pointY(at.y), 4.0 / std::max(std::fabs(m.ax), 1e-6));  // Grenzen: ~4 Pixel wie beim Leuchten
+        if (!IsRectEmpty(&lit.band)) {  // leuchtet eine Grenze, gilt genau diese
+            hit.lineRow = lit.row;
+            hit.hasLineDate = lit.hasDate;
+            hit.lineDate = lit.hasDate ? lit.date : 0;
+        }
+        g_menuInfo = std::format(L"trennzeile={} trenndatum={}", hit.lineRow, hit.hasLineDate ? engine::isoDate(hit.lineDate) : L"-");
         radial = wantsRadial(hit) && g_gantt.valid;
         if (!radial) showGanttMenu(g_app.Get(), powerPointWindow(), at, hit);
     });
@@ -766,7 +856,8 @@ void CALLBACK onShowMenu(HWND, UINT, UINT_PTR id, DWORD) {
 // Rechtsklick in einen Zeitplan (ausgewählt oder nicht): PowerPoint bekommt ihn nicht, nach dem Loslassen erscheint
 // das eigene Kontextmenü. Liefert true, wenn die Nachricht verschluckt wird.
 bool rightClick(WPARAM message, const MOUSEHOOKSTRUCT* info) {
-    if (g_inMenu || g_dragging || g_acting || !g_app || (info->hwnd && (info->hwnd == ganttToolbarWindow() || info->hwnd == radialMenuWindow())))
+    if (g_inMenu || g_dragging || g_acting || !g_app ||
+        (info->hwnd && (info->hwnd == ganttToolbarWindow() || info->hwnd == radialMenuWindow() || info->hwnd == g_editor.hwnd)))
         return false;
     const POINT p = info->pt;
     if (message == WM_RBUTTONDOWN) {
@@ -783,20 +874,15 @@ bool rightClick(WPARAM message, const MOUSEHOOKSTRUCT* info) {
     return false;
 }
 
-// Grenze unter der Maus: zwischen zwei Aktivitätszeilen (waagerecht über das ganze Diagramm) oder an einer Einheit der
-// feinsten Skala (senkrecht von den Zeilen bis unter die Meilensteinzeile), höchstens ~4 Pixel entfernt; die nähere gewinnt.
+// Grenze unter der Maus (siehe Boundary): waagerecht über das ganze Diagramm, senkrecht von der Skala bis unter die Meilensteinzeile.
 // Rechnet nur mit den beim letzten Aufbau gemerkten Lagen, ohne COM.
-struct Boundary {
-    RECT band{};
-    std::wstring text;
-};
-
 Boundary boundaryAt(POINT p) {
     Boundary b;
     if (!g_gantt.valid) return b;
     const Mapping& m = g_overlayMap;
     const long reach = 4, half = scaled(5) / 2;  // ~4 Bildschirmpixel Reichweite
-    const long left = m.x(g_gantt.labelsLeft), right = m.x(g_gantt.plotRight), top = m.y(g_gantt.rowsTop), bottom = m.y(g_gantt.bottom);
+    const long left = m.x(g_gantt.labelsLeft), right = m.x(g_gantt.plotRight), bottom = m.y(g_gantt.bottom);
+    const long rowsTop = m.y(g_gantt.rowsTop), top = g_gantt.scaleBottom > g_gantt.scaleTop ? m.y(g_gantt.scaleTop) : rowsTop;  // senkrecht auch im Skalenband
     long best = reach + 1;
     if (p.x >= left && p.x <= right)
         for (int i = 1; i < g_gantt.rowCount; ++i) {
@@ -804,7 +890,8 @@ Boundary boundaryAt(POINT p) {
             if (std::labs(p.y - y) < best) {
                 best = std::labs(p.y - y);
                 b.band = {left, y - half, right, y + half + 1};
-                b.text = std::format(L"waagerecht zeile={}", engine::gantt::kFirstActivityRow + i);
+                b.row = engine::gantt::kFirstActivityRow + i;
+                b.text = std::format(L"waagerecht zeile={}", b.row);
             }
         }
     if (p.y >= top && p.y <= bottom)
@@ -813,6 +900,7 @@ Boundary boundaryAt(POINT p) {
             if (std::labs(p.x - x) < best) {
                 best = std::labs(p.x - x);
                 b.band = {x - half, top, x + half + 1, bottom};
+                b.row = -1, b.hasDate = true, b.date = e.date;
                 b.text = std::format(L"senkrecht datum={}", engine::isoDate(e.date));
             }
         }
@@ -820,9 +908,8 @@ Boundary boundaryAt(POINT p) {
 }
 
 void setHoverLine(const Boundary& b) {
-    if (EqualRect(&b.band, &g_hoverLine) || (IsRectEmpty(&b.band) && IsRectEmpty(&g_hoverLine))) return;
-    g_hoverLine = b.band;
-    g_hoverText = b.text;
+    if (EqualRect(&b.band, &g_hover.band) || (IsRectEmpty(&b.band) && IsRectEmpty(&g_hover.band))) return;
+    g_hover = b;
     g_shown.line = b.band;
     setOverlayLine(b.band);
 }
@@ -849,7 +936,9 @@ LRESULT CALLBACK onMouse(int code, WPARAM message, LPARAM lParam) {
     }
     if (code >= 0 && g_element && !g_dragging && !g_acting) {
         const auto* info = reinterpret_cast<const MOUSEHOOKSTRUCT*>(lParam);
-        if (info->hwnd != overlayWindow() && info->hwnd != ganttToolbarWindow() && info->hwnd != radialMenuWindow()) {
+        // Auch das Eingabefeld einer Zelle: Markieren per Ziehen darin soll das Overlay nicht verschieben
+        if (info->hwnd != overlayWindow() && info->hwnd != ganttToolbarWindow() && info->hwnd != radialMenuWindow() &&
+            (!g_editor.hwnd || info->hwnd != g_editor.hwnd)) {
             const POINT p = info->pt;
             switch (message) {
                 case WM_LBUTTONDOWN: {
@@ -883,6 +972,7 @@ LRESULT CALLBACK onMouse(int code, WPARAM message, LPARAM lParam) {
 
 void onSelectionChange(IDispatch* selection) {
     try {
+        closeEditor(true, 0, false);  // offenes Eingabefeld: Text übernehmen, nicht verlieren
         auto element = rethinkElementOf(selection);
         if (!element) return stopTracking();
         g_element = element;
@@ -1082,6 +1172,8 @@ std::wstring overlayInfo() {
         text += h.role.empty() ? std::format(L"r{} c{}", h.row, h.column) : widen(h.role);
         text += std::format(L" {},{},{},{}]", h.rect.left, h.rect.top, h.rect.right, h.rect.bottom);
     }
+    // Leuchtende Grenze unter der Maus und Grenze des zuletzt geöffneten Menüs (Tests mit echter Maus)
+    text += std::format(L" hover={} menue={} editor={}", g_hover.text.empty() ? L"-" : g_hover.text, g_menuInfo.empty() ? L"-" : g_menuInfo, g_editor.hwnd != nullptr);
     return text;
 }
 
@@ -1181,8 +1273,9 @@ std::wstring simulateGanttEditCell(double x, double y, const std::wstring& text)
     const OverlayHandle handle = *found;
     openCellEditor(handle);  // wie ein Klick
     if (!g_editor.hwnd) throw Error("Das Eingabefeld ließ sich nicht öffnen.");
-    SetWindowTextW(g_editor.hwnd, text.c_str());
-    closeEditor(true, 0);  // wie Enter
+    const bool stayOpen = !text.empty() && text[0] == L'\x01';  // Test: tippen, aber offen lassen (der Auswahlwechsel soll schließen)
+    SetWindowTextW(g_editor.hwnd, stayOpen ? text.c_str() + 1 : text.c_str());
+    if (!stayOpen) closeEditor(true, 0, true);  // wie Enter
     return ganttCellInfo(g_element.Get(), handle.row, handle.column).text;
 }
 

@@ -1566,6 +1566,15 @@ GanttCellInfo ganttCellInfo(IDispatch* element, int row, int col) {
     info.fontPt = options.fontPt;
     if (row >= 0 && static_cast<size_t>(row) < item.table.size() && col >= 0 && static_cast<size_t>(col) < item.table[row].size())
         info.text = cellText(item.table[row][col]);
+    // Schrift wie gezeichnet: die Beschriftung der Zeile, sonst die Kopfzeile
+    for (const int r : {row, 1}) {
+        try {
+            auto shape = disp::object(disp::object(element, L"GroupItems").Get(), L"Item", widen(std::format("activity r{}", r)));
+            info.fontName = disp::call(disp::object(disp::object(disp::object(shape.Get(), L"TextFrame").Get(), L"TextRange").Get(), L"Font").Get(), L"Name").str();
+            if (!info.fontName.empty()) break;
+        } catch (...) {
+        }
+    }
     return info;
 }
 
@@ -1712,8 +1721,9 @@ GanttHit ganttHitAt(IDispatch* element, double x, double y, double lineTolerance
                 best = std::llabs(ey - band.y), hit.lineRow = band.row;
         }
         Emu bestX = reach + 1;
+        const Emu top = d.scaleBottom > d.scaleTop ? d.scaleTop : rowsTop;  // senkrechte Grenzen reichen hinauf bis in das Skalenband
         for (auto& edge : d.dateEdges)
-            if (ey >= rowsTop && ey <= bottom && std::llabs(ex - edge.x) < bestX) bestX = std::llabs(ex - edge.x), hit.lineDate = edge.date;
+            if (ey >= top && ey <= bottom && std::llabs(ex - edge.x) < bestX) bestX = std::llabs(ex - edge.x), hit.lineDate = edge.date;
         hit.hasLineDate = bestX <= reach;
         if (hit.lineRow >= 0 && hit.hasLineDate) {  // nur die nähere Grenze zählt
             if (best <= bestX) hit.hasLineDate = false;

@@ -720,6 +720,11 @@ void testGanttLines() {
         rejected = true;
     }
     check(rejected, "dateLines erwartet ISO-Daten");
+    // Doppelte Einträge: sortiert, ohne Wiederholung, Daten auf den Tag normalisiert
+    const ChartOptions dup = parseChartOptions(
+        L"{\"type\":\"gantt\",\"rowLines\":[4,3,4],\"dateLines\":[\"2026-11-16T10:00\",\"2026-11-09\",\"2026-11-16\"]}");
+    check(dup.gantt.rowLines == std::vector<int>({3, 4}), "rowLines: sortiert und ohne Doppelte");
+    check(dup.gantt.dateLines == std::vector<std::wstring>({L"2026-11-09", L"2026-11-16"}), "dateLines: auf den Tag normalisiert, sortiert, ohne Doppelte");
 }
 
 }  // namespace

@@ -2,6 +2,7 @@
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Data.Json.h>
 
+#include "engine/dates.h"
 #include "ppttc.h"
 #include "util.h"
 
@@ -11,6 +12,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <fstream>
 #include <iterator>
@@ -313,6 +315,8 @@ void parseGantt(const JsonObject& o, engine::GanttOptions& g) {
     if (present(o, L"rowSeparators")) g.rowSeparators = optionalBool(o, L"rowSeparators", false);
     g.shadedRows = intList(o, L"shadedRows");
     g.rowLines = intList(o, L"rowLines");
+    std::sort(g.rowLines.begin(), g.rowLines.end());
+    g.rowLines.erase(std::unique(g.rowLines.begin(), g.rowLines.end()), g.rowLines.end());
     for (int r : g.rowLines)
         if (r < 3) fail("chart", "\"rowLines\" erwartet Zeilennummern ab 3 (Oberkante der zweiten Aktivitätszeile oder tiefer)");
     if (present(o, L"dateLines")) {
@@ -323,8 +327,11 @@ void parseGantt(const JsonObject& o, engine::GanttOptions& g) {
             const std::wstring text(day.GetString());
             if (text.empty()) fail("chart", "\"dateLines\" darf keine leeren Einträge enthalten");
             checkDate(text, "chart", "dateLines");
-            g.dateLines.push_back(text);
+            const auto t = engine::parseIsoDate(text);  // auf den Tag normalisiert: "2026-11-09T10:00" und "2026-11-09" sind dieselbe Linie
+            g.dateLines.push_back(t ? engine::isoDate(std::floor(*t)) : text);
         }
+        std::sort(g.dateLines.begin(), g.dateLines.end());
+        g.dateLines.erase(std::unique(g.dateLines.begin(), g.dateLines.end()), g.dateLines.end());
     }
     if (o.HasKey(L"today")) {
         auto v = o.GetNamedValue(L"today");

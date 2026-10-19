@@ -111,6 +111,7 @@ std::vector<std::wstring> ganttRowCategories(IDispatch* element);
 struct GanttCellInfo {
     std::wstring text;
     double fontPt = 12;
+    std::wstring fontName;  // Schrift der Beschriftung im Diagramm (leer = unbekannt)
 };
 GanttCellInfo ganttCellInfo(IDispatch* element, int row, int col);
 // Schreibt Text in eine Beschriftungszelle (Aktivität, Verantwortlich, Bemerkung, Kategorie) eines Aktivitätszeile; das

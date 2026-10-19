@@ -210,15 +210,30 @@ HWND ensureWindow(HWND owner) {
     return g_window;
 }
 
-// Sechs Punkte „⋮⋮“ (zwei Spalten, drei Reihen) mittig im Rechteck
-void drawDots(Canvas& canvas, const RECT& r, int dot, double alpha) {
-    const int gap = dot, w = 2 * dot + gap, h = 3 * dot + 2 * gap;
-    const int x0 = (r.left + r.right - w) / 2, y0 = (r.top + r.bottom - h) / 2;
+// Sechs Punkte „⋮⋮“ (zwei Spalten, drei Reihen), rechtsbündig im Rechteck, senkrecht mittig. Liefert die Breite.
+int drawDots(Canvas& canvas, const RECT& r, int dot, int gap, COLORREF color, double alpha) {
+    const int w = 2 * dot + gap, h = 3 * dot + 2 * gap;
+    const int x0 = r.right - w - 1, y0 = (r.top + r.bottom - h) / 2;
     for (int i = 0; i < 2; ++i)
         for (int j = 0; j < 3; ++j) {
             const int x = x0 + i * (dot + gap), y = y0 + j * (dot + gap);
-            canvas.fill({x, y, x + dot, y + dot}, kBlue, alpha);
+            canvas.fill({x, y, x + dot, y + dot}, color, alpha);
         }
+    return w;
+}
+
+// Verschiebe-Symbol „✥“ (Kreuz mit vier Pfeilspitzen) mittig im Rechteck
+void drawMoveArrow(Canvas& canvas, const RECT& r, COLORREF color, double alpha, int thickness) {
+    const int cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2, arm = std::max<int>(4, std::min(r.right - r.left, r.bottom - r.top) / 2 - 1);
+    const int head = arm / 2 + 2, t = std::max(1, thickness), t0 = t / 2;
+    canvas.fill({cx - arm + 1, cy - t0, cx + arm, cy - t0 + t}, color, alpha);
+    canvas.fill({cx - t0, cy - arm + 1, cx - t0 + t, cy + arm}, color, alpha);
+    for (int i = 0; i < head; ++i) {  // i = Abstand von der Spitze: die Spitze ist 1 Pixel breit, nach innen breiter
+        canvas.fill({cx - i, cy - arm + i, cx + i + 1, cy - arm + i + 1}, color, alpha);
+        canvas.fill({cx - i, cy + arm - i - 1, cx + i + 1, cy + arm - i}, color, alpha);
+        canvas.fill({cx - arm + i, cy - i, cx - arm + i + 1, cy + i + 1}, color, alpha);
+        canvas.fill({cx + arm - i - 1, cy - i, cx + arm - i, cy + i + 1}, color, alpha);
+    }
 }
 
 // Rechteck mit 1 Pixel breitem Rand (Fensterkoordinaten)
@@ -339,7 +354,15 @@ void render(bool move) {
             case HandleStyle::RowGrip: {
                 const bool lit = hotRow && hot->row == h.row;
                 canvas.fill(r, kBlue, lit ? 0.14 : 0.004);  // auch unscheinbar „da“, damit das Fenster die Maus bekommt
-                drawDots(canvas, r, std::max(2, scaled(owner, 2)), lit ? 1.0 : 0.4);
+                // Punkte immer deutlich sichtbar (dunkelgrau); bei Maus über der Zeile blau, dazu links das Verschiebe-Symbol
+                const int gap = std::max(1, scaled(owner, 2));
+                const int dot = std::max(2, std::min(scaled(owner, 3), (static_cast<int>(r.bottom - r.top) - 2 * gap - 2) / 3));
+                const int dotsW = drawDots(canvas, r, dot, gap, lit ? kBlue : RGB(64, 64, 64), lit ? 1.0 : 0.7);
+                if (lit) {
+                    const int s = std::min<int>(r.right - r.left - dotsW - scaled(owner, 4), std::min<int>(scaled(owner, 12), r.bottom - r.top - 2));
+                    const RECT symbol{r.left + scaled(owner, 1), (r.top + r.bottom - s) / 2, r.left + scaled(owner, 1) + s, (r.top + r.bottom + s) / 2};
+                    if (s >= scaled(owner, 7)) drawMoveArrow(canvas, symbol, kBlue, 1.0, std::max(1, scaled(owner, 1)));
+                }
                 break;
             }
         }

@@ -40,7 +40,7 @@ std::wstring simulateGanttRightClick(double x, double y, const std::wstring& com
 // "senkrecht datum=2026-11-09 band=…") und den leuchtenden Griff ("griff=zelle r2 c0"), durch "; " getrennt; leer = nichts.
 std::wstring simulateGanttHover(double x, double y);
 // Für Tests: öffnet das Eingabefeld der Beschriftungszelle an einem Folienpunkt wie ein Klick, setzt den Text, bestätigt wie Enter
-// und liefert den Zelltext danach.
+// und liefert den Zelltext danach. Beginnt text mit U+0001, bleibt das Eingabefeld mit dem restlichen Text offen (Zelltext davor).
 std::wstring simulateGanttEditCell(double x, double y, const std::wstring& text);
 
 }  // namespace rethink::addin
