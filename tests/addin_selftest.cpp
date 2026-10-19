@@ -73,9 +73,15 @@ int wmain(int argc, wchar_t** argv) {
         expect(text.find(L"label=\"rethink\"") != std::wstring::npos, "Ribbon-XML: Tab \"rethink\"");
         expect(text.find(L"Aus .ppttc erzeugen…") != std::wstring::npos, "Ribbon-XML: Umlaute/Auslassung korrekt (UTF-8)");
         for (const wchar_t* cb : {L"RethinkBuild", L"RethinkInsertChart", L"RethinkSetName", L"RethinkInsertWaterfall", L"RethinkOpenDatasheet",
-                                  L"RethinkInsertGallery", L"RethinkInsertGantt", L"RethinkGanttAction", L"RethinkGanttToggle"})
+                                  L"RethinkInsertGallery", L"RethinkInsertGantt", L"RethinkGanttAction", L"RethinkGanttToggle", L"RethinkMso",
+                                  L"RethinkCommand", L"RethinkOpenExcel", L"RethinkApplySheets", L"RethinkAbout"})
             expect(text.find(std::wstring(L"onAction=\"") + cb + L"\"") != std::wstring::npos && idOf(dispatch.Get(), cb) != DISPID_UNKNOWN,
                    "Rückruf im XML und per GetIDsOfNames auflösbar");
+        for (const wchar_t* group : {L"rethinkGroupStructure", L"rethinkGroupElements", L"rethinkGroupData", L"rethinkGroupText", L"rethinkGroupLayout",
+                                     L"rethinkGroupColor", L"rethinkGroupQuality", L"rethinkGroupCollab", L"rethinkGroupMore"})
+            expect(text.find(std::wstring(L"<group id=\"") + group + L"\"") != std::wstring::npos, "Ribbon-XML: Gruppe vorhanden");
+        expect(text.find(L"getImage=\"RethinkImage\"") != std::wstring::npos && idOf(dispatch.Get(), L"RethinkImage") != DISPID_UNKNOWN,
+               "getImage-Rückruf im XML und auflösbar");
         for (const wchar_t* cb : {L"RethinkGanttVisible", L"RethinkGanttPressed"})
             expect(text.find(cb) != std::wstring::npos && idOf(dispatch.Get(), cb) != DISPID_UNKNOWN, "get-Rückruf im XML und auflösbar");
         expect(text.find(L"<!--rethink:gantt-menu") == std::wstring::npos && text.find(L"id=\"rtkGantt_a\"") != std::wstring::npos &&
@@ -105,6 +111,19 @@ int wmain(int argc, wchar_t** argv) {
                    result.vt == VT_BSTR && SysStringLen(result.bstrVal) > 0,
                "Version");
         VariantClear(&result);
+
+        // getImage für ein unbekanntes Steuerelement (hier: Argument ohne Objekt) liefert leer, ohne Absturz
+        {
+            VARIANT arg;
+            VariantInit(&arg);
+            arg.vt = VT_I4;
+            DISPPARAMS one{&arg, nullptr, 1, 0};
+            VariantInit(&result);
+            expect(SUCCEEDED(dispatch->Invoke(idOf(dispatch.Get(), L"RethinkImage"), IID_NULL, 0, DISPATCH_METHOD, &one, &result, nullptr, nullptr)) &&
+                       result.vt == VT_EMPTY,
+                   "RethinkImage ohne gültiges Steuerelement: leer, kein Absturz");
+            VariantClear(&result);
+        }
 
         // Ohne OnConnection muss ein Befehl sauber als Ausnahme gemeldet werden, nicht abstürzen.
         EXCEPINFO info{};

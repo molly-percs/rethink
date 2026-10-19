@@ -13,6 +13,7 @@
 #include "gantt_menu.h"
 #include "officeapi.h"
 #include "resource.h"
+#include "ribbon_icons.h"
 #include "version.h"
 
 #include <wrl/implements.h>
@@ -50,6 +51,12 @@ enum : DISPID {
     kOnGanttToggle,   // Umschalter: onAction(control, pressed)
     kOnGanttPressed,  // Umschalter: getPressed
     kOnRibbonLoad,    // customUI onLoad: Office hat das Ribbon-XML angenommen
+    kOnImage,         // getImage: eigenes Symbol (siehe controlTag)
+    kOnMso,           // onAction: PowerPoint-Befehl (tag "mso:<idMso>")
+    kOnCommand,       // onAction: Zeitplan-Befehl (tag "cmd:<Befehl>")
+    kOnOpenExcel,     // Datenblatt in Excel
+    kOnApplySheets,   // geänderte Datenblätter übernehmen
+    kOnAbout,         // Name und Version
     // Automation über Application.COMAddIns("rethink.addin").Object
     kBuildFrom = 101,
     kInsertChart,
@@ -110,6 +117,8 @@ constexpr Member kMembers[] = {
     {L"InsertElement", kInsertElement}, {L"GanttTargets", kGanttTargets}, {L"GanttDrag", kGanttDrag}, {L"GanttCommand", kGanttCommand},
     {L"GanttToggle", kGanttToggle}, {L"GanttPressed", kGanttPressed}, {L"SetGanttDates", kSetGanttDates}, {L"GanttHit", kGanttHit},
     {L"OpenCalendar", kOpenCalendar}, {L"CloseCalendar", kCloseCalendar}, {L"CalendarPick", kCalendarPick}, {L"RethinkRibbonLoad", kOnRibbonLoad},
+    {L"RethinkImage", kOnImage}, {L"RethinkMso", kOnMso}, {L"RethinkCommand", kOnCommand}, {L"RethinkOpenExcel", kOnOpenExcel},
+    {L"RethinkApplySheets", kOnApplySheets}, {L"RethinkAbout", kOnAbout},
     {L"RibbonStatus", kRibbonStatus}, {L"ActivateTab", kActivateTab}, {L"GanttMenu", kGanttMenu}, {L"GanttToolbar", kGanttToolbar}, {L"GanttRightClick", kGanttRightClick},
 };
 
@@ -204,17 +213,36 @@ std::wstring loadRibbonXml() {
     return text;
 }
 
-// Steuerelement eines Ribbon-Rückrufs (Argument `index`) → seine ID
-std::wstring controlId(const DISPPARAMS* params, UINT index) {
+// Steuerelement eines Ribbon-Rückrufs (Argument `index`) → Eigenschaft (Id, Tag)
+std::wstring controlProp(const DISPPARAMS* params, UINT index, const wchar_t* property) {
     if (!params || index >= params->cArgs) return {};
     const VARIANT& v = params->rgvarg[params->cArgs - 1 - index];
     IDispatch* control = v.vt == VT_DISPATCH ? v.pdispVal : v.vt == (VT_DISPATCH | VT_BYREF) && v.ppdispVal ? *v.ppdispVal : nullptr;
     if (!control) return {};
     try {
-        return disp::call(control, L"Id").str();
+        return disp::call(control, property).str();
     } catch (...) {
         return {};
     }
+}
+
+std::wstring controlId(const DISPPARAMS* params, UINT index) { return controlProp(params, index, L"Id"); }
+
+// Das tag eines eigenen Steuerelements ist "|"-getrennt: "icon:<Symbol>", "mso:<idMso>", "cmd:<Zeitplan-Befehl>",
+// z. B. tag="icon:textbox|mso:TextBoxInsert". Große Symbole (32 px): nur die Menüs/Schaltflächen aus kLargeIcons.
+std::wstring tagPart(const std::wstring& tag, const std::wstring& key) {
+    for (size_t pos = 0; pos <= tag.size();) {
+        const size_t end = std::min(tag.find(L'|', pos), tag.size());
+        if (tag.compare(pos, key.size(), key) == 0 && end - pos >= key.size()) return tag.substr(pos + key.size(), end - pos - key.size());
+        pos = end + 1;
+    }
+    return {};
+}
+
+bool isLargeIcon(const std::wstring& icon) {
+    for (const wchar_t* large : {L"agenda", L"library", L"charts", L"layout", L"color", L"quality", L"collab", L"more"})
+        if (icon == large) return true;
+    return false;
 }
 
 // Rückgabe eines get…-Rückrufs: über pVarResult und, falls Office ein Ausgabeargument mitgibt, auch dorthin.
@@ -431,6 +459,58 @@ public:
         case kOnRibbonLoad:
             if (params && params->cArgs >= 1 && params->rgvarg[0].vt == VT_DISPATCH) ribbon_ = params->rgvarg[0].pdispVal;
             return S_OK;
+        case kOnImage: {
+            if (result) VariantInit(result);  // ohne Symbol: leer, Office zeigt nur die Beschriftung
+            try {
+                const std::wstring icon = tagPart(controlProp(params, 0, L"Tag"), L"icon:");
+                if (icon.empty()) return S_OK;
+                IPictureDisp* picture = ribbonIcon(icon, isLargeIcon(icon));
+                if (picture && result) {
+                    result->vt = VT_DISPATCH;
+                    result->pdispVal = picture;
+                } else if (picture) {
+                    picture->Release();
+                }
+            } catch (...) {
+            }
+            return S_OK;
+        }
+        case kOnMso:
+            ribbonGuarded([&] {
+                const std::wstring mso = tagPart(controlProp(params, 0, L"Tag"), L"mso:");
+                if (mso.empty()) return;
+                if (!app_) throw Error("Das Add-in ist nicht mit PowerPoint verbunden");
+                disp::call(disp::object(app_.Get(), L"CommandBars").Get(), L"ExecuteMso", mso);
+            });
+            return S_OK;
+        case kOnCommand:
+            ribbonGuarded([&] {
+                const std::wstring command = tagPart(controlProp(params, 0, L"Tag"), L"cmd:");
+                if (command.empty()) return;
+                if (!app_) throw Error("Das Add-in ist nicht mit PowerPoint verbunden");
+                ganttCommand(app_.Get(), command, GanttHit{});
+            });
+            return S_OK;
+        case kOnOpenExcel:
+            ribbonGuarded([&] {
+                if (!app_) throw Error("Das Add-in ist nicht mit PowerPoint verbunden");
+                openExcelDatasheet(app_.Get(), true);
+            });
+            return S_OK;
+        case kOnApplySheets:
+            ribbonGuarded([&] {
+                if (!app_) throw Error("Das Add-in ist nicht mit PowerPoint verbunden");
+                const int count = applyDatasheets(app_.Get());
+                MessageBoxW(nullptr, count > 0 ? std::format(L"{} Element(e) aus dem Datenblatt neu gezeichnet.", count).c_str() : L"Keine geänderten Datenblätter.",
+                            L"rethink", MB_ICONINFORMATION);
+            });
+            return S_OK;
+        case kOnAbout: {
+            std::wstring text = L"rethink " RETHINK_VERSION L"\nDiagramme und Zeitpläne für PowerPoint";
+            if (controlId(params, 0) == L"rethinkHelp") text += L"\n\nAnleitung: README.md im rethink-Projektordner (github.com/molly-percs/rethink).";
+            MessageBoxW(nullptr, text.c_str(), L"rethink", MB_ICONINFORMATION);
+            return S_OK;
+        }
         case kRibbonStatus: setString(result, ribbon_ ? L"geladen" : L"nicht geladen"); return S_OK;
         default: break;
         }

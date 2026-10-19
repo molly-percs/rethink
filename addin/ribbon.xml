@@ -1,42 +1,210 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Eigene Symbole: getImage="RethinkImage" mit tag="icon:NAME"; zusätzlich "|mso:IDMSO" (RethinkMso) bzw. "|cmd:ZEITPLAN-BEFEHL" (RethinkCommand). -->
 <customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui" onLoad="RethinkRibbonLoad">
   <ribbon>
     <tabs>
       <tab id="rethinkTab" label="rethink">
-        <group id="rethinkGroupCreate" label="Erzeugen">
-          <button id="rethinkBuild" size="large" imageMso="FileOpen" onAction="RethinkBuild"
-                  label="Aus .ppttc erzeugen…"
-                  screentip="Aus .ppttc erzeugen"
-                  supertip="Wählt eine .ppttc-Datei, erzeugt daraus eine neue Präsentation und öffnet sie."/>
+
+        <group id="rethinkGroupStructure" label="Struktur">
+          <box id="rethinkStructureCol" boxStyle="vertical">
+            <control idMso="SlideNewGallery"/>
+            <control idMso="PasteMenu"/>
+            <control idMso="FormatPainter"/>
+          </box>
+          <menu id="rethinkAgenda" label="Agenda" size="large" getImage="RethinkImage" tag="icon:agenda"
+                screentip="Agenda" supertip="Agenda-Folien einfügen und aktualisieren – geplant.">
+            <button id="rethinkAgendaInsert" label="Agenda einfügen (geplant)" enabled="false"
+                    supertip="Noch nicht umgesetzt."/>
+            <button id="rethinkAgendaUpdate" label="Agenda aktualisieren (geplant)" enabled="false"
+                    supertip="Noch nicht umgesetzt."/>
+          </menu>
         </group>
-        <group id="rethinkGroupCharts" label="Diagramme">
-          <button id="rethinkGallery" size="large" imageMso="ChartInsert" onAction="RethinkInsertGallery"
-                  label="Diagramm einfügen"
-                  screentip="Diagramm einfügen"
-                  supertip="Zeigt alle Diagrammtypen. Pfeile um ein Symbol wählen die Ausrichtung; ausgegraute Typen sind in rethink noch nicht umgesetzt."/>
-          <button id="rethinkWaterfall" imageMso="ChartInsert" onAction="RethinkInsertWaterfall"
-                  label="Wasserfall"
-                  screentip="Wasserfall einfügen"
-                  supertip="Fügt einen rethink-Wasserfall mit Datentabelle ein. „e“ in einer Zelle ist eine berechnete Summe. Werte ändern: ▲▼ am Segment klicken oder ziehen, Datenblatt über das Symbol unten rechts oder per Doppelklick."/>
-          <button id="rethinkGantt" imageMso="DateAndTimeInsert" onAction="RethinkInsertGantt"
-                  label="Gantt / Zeitplan"
-                  screentip="Gantt-Diagramm einfügen"
-                  supertip="Fügt einen Zeitplan für den aktuellen und die zwei folgenden Monate ein. Balken und Meilensteine ziehen, Skalenenden ziehen, Doppelklick auf die Skala öffnet den Kalender, Rechtsklick → rethink-Zeitplan für Zeilen, Elemente und Anzeige."/>
-          <button id="rethinkDatasheet" size="large" imageMso="TableExcelSpreadsheetInsert" onAction="RethinkOpenDatasheet"
-                  label="Datenblatt öffnen"
-                  screentip="Datenblatt öffnen"
-                  supertip="Öffnet das Datenblatt des ausgewählten rethink-Diagramms (auch über das Symbol unten rechts oder per Doppelklick). Jede Eingabe zeichnet das Diagramm sofort neu."/>
-        </group>
+
         <group id="rethinkGroupElements" label="Elemente">
-          <button id="rethinkChart" size="large" imageMso="ChartInsert" onAction="RethinkInsertChart"
-                  label="Natives Diagramm"
-                  screentip="Natives Diagramm einfügen"
-                  supertip="Fügt auf der aktuellen Folie ein natives Säulendiagramm ein und benennt es Chart1, Chart2 … – unter diesem Namen füllt rethink es aus einer .ppttc-Datei."/>
-          <button id="rethinkName" size="large" imageMso="SelectionPane" onAction="RethinkSetName"
-                  label="Elementname setzen"
-                  screentip="Elementname setzen"
-                  supertip="Setzt den Alternativtext „rethink:&lt;Name&gt;“ auf die ausgewählten Formen. Unter diesem Namen füllt rethink sie aus einer .ppttc-Datei."/>
+          <button id="rethinkLibrary" label="Bibliothek" size="large" enabled="false" getImage="RethinkImage" tag="icon:library"
+                  screentip="Bibliothek" supertip="Folienbibliothek – geplant."/>
+          <menu id="rethinkCharts" label="Diagramme" size="large" getImage="RethinkImage" tag="icon:charts"
+                screentip="Diagramme" supertip="Wasserfall, Gantt-Zeitplan und weitere Diagramme einfügen.">
+            <button id="rethinkGallery" imageMso="ChartInsert" onAction="RethinkInsertGallery"
+                    label="Alle Diagramme …"
+                    screentip="Diagramm einfügen"
+                    supertip="Zeigt alle Diagrammtypen. Pfeile um ein Symbol wählen die Ausrichtung; ausgegraute Typen sind in rethink noch nicht umgesetzt."/>
+            <button id="rethinkWaterfall" imageMso="ChartInsert" onAction="RethinkInsertWaterfall"
+                    label="Wasserfall"
+                    screentip="Wasserfall einfügen"
+                    supertip="Fügt einen rethink-Wasserfall mit Datentabelle ein. „e“ in einer Zelle ist eine berechnete Summe. Werte ändern: ▲▼ am Segment klicken oder ziehen, Datenblatt über das Symbol unten rechts oder per Doppelklick."/>
+            <button id="rethinkGantt" imageMso="DateAndTimeInsert" onAction="RethinkInsertGantt"
+                    label="Gantt / Zeitplan"
+                    screentip="Gantt-Diagramm einfügen"
+                    supertip="Fügt einen Zeitplan für den aktuellen und die zwei folgenden Monate ein. Balken und Meilensteine ziehen, Skalenenden ziehen, Doppelklick auf die Skala öffnet den Kalender, Rechtsklick → rethink-Zeitplan für Zeilen, Elemente und Anzeige."/>
+            <menuSeparator id="rethinkChartsSep"/>
+            <button id="rethinkChart" imageMso="ChartInsert" onAction="RethinkInsertChart"
+                    label="Natives Diagramm"
+                    screentip="Natives Diagramm einfügen"
+                    supertip="Fügt auf der aktuellen Folie ein natives Säulendiagramm ein und benennt es Chart1, Chart2 … – unter diesem Namen füllt rethink es aus einer .ppttc-Datei."/>
+          </menu>
+          <box id="rethinkElementsColA" boxStyle="vertical">
+            <button id="rethinkTextBox" label="Textfeld" showLabel="false" onAction="RethinkMso" getImage="RethinkImage"
+                    tag="icon:textbox|mso:TextBoxInsert"
+                    screentip="Textfeld" supertip="Fügt ein Textfeld ein."/>
+            <button id="rethinkProcess" label="Prozesspfeil" showLabel="false" enabled="false" getImage="RethinkImage" tag="icon:process"
+                    screentip="Prozesspfeil" supertip="Prozesspfeil – geplant."/>
+            <button id="rethinkRoundRect" label="Abgerundetes Rechteck" showLabel="false" enabled="false" getImage="RethinkImage" tag="icon:roundrect"
+                    screentip="Abgerundetes Rechteck" supertip="Abgerundetes Rechteck im rethink-Stil – geplant."/>
+          </box>
+          <box id="rethinkElementsColB" boxStyle="vertical">
+            <button id="rethinkConnector" label="Verbinder" showLabel="false" enabled="false" getImage="RethinkImage" tag="icon:connector"
+                    screentip="Verbinder" supertip="Verbinder – geplant."/>
+            <button id="rethinkHarvey" label="Harvey Ball" showLabel="false" enabled="false" getImage="RethinkImage" tag="icon:harvey"
+                    screentip="Harvey Ball" supertip="Harvey Ball – geplant."/>
+            <button id="rethinkCheckbox" label="Kontrollkästchen" showLabel="false" enabled="false" getImage="RethinkImage" tag="icon:checkbox"
+                    screentip="Kontrollkästchen" supertip="Kontrollkästchen – geplant."/>
+          </box>
+          <box id="rethinkElementsColC" boxStyle="vertical">
+            <menu id="rethinkLists" label="Listen" showLabel="false" getImage="RethinkImage" tag="icon:list"
+                  screentip="Listen" supertip="Aufzählungen im rethink-Stil – geplant.">
+              <button id="rethinkListBullets" label="Aufzählung – geplant" enabled="false" supertip="Noch nicht umgesetzt."/>
+            </menu>
+          </box>
+          <box id="rethinkElementsColD" boxStyle="vertical">
+            <button id="rethinkTable" label="Tabelle" onAction="RethinkMso" getImage="RethinkImage"
+                    tag="icon:table|mso:TableInsert"
+                    screentip="Tabelle" supertip="Fügt eine Tabelle ein."/>
+            <menu id="rethinkShapes" label="Formen" getImage="RethinkImage" tag="icon:shapes"
+                  screentip="Formen" supertip="Formen aus dem PowerPoint-Katalog einfügen.">
+              <control idMso="ShapesInsertGallery"/>
+            </menu>
+            <menu id="rethinkImages" label="Bilder" getImage="RethinkImage" tag="icon:images"
+                  screentip="Bilder" supertip="Bilder einfügen.">
+              <button id="rethinkImageFile" label="Bild aus Datei …" onAction="RethinkMso" tag="mso:PictureInsertFromFilePowerPoint"
+                      imageMso="PictureInsertFromFile"
+                      screentip="Bild aus Datei" supertip="Fügt ein Bild aus einer Datei ein."/>
+            </menu>
+          </box>
         </group>
+
+        <group id="rethinkGroupData" label="Daten">
+          <box id="rethinkDataCol" boxStyle="vertical">
+            <button id="rethinkDatasheet" label="Datenblatt" onAction="RethinkOpenDatasheet" getImage="RethinkImage" tag="icon:datasheet"
+                    screentip="Datenblatt öffnen"
+                    supertip="Öffnet das Datenblatt des ausgewählten rethink-Diagramms (auch über das Symbol unten rechts oder per Doppelklick). Jede Eingabe zeichnet das Diagramm sofort neu."/>
+            <button id="rethinkExcel" label="In Excel bearbeiten" onAction="RethinkOpenExcel" getImage="RethinkImage" tag="icon:workbook"
+                    screentip="In Excel bearbeiten"
+                    supertip="Öffnet das Datenblatt des ausgewählten rethink-Diagramms in Excel. Änderungen in der Arbeitsmappe zeichnen das Diagramm neu."/>
+            <button id="rethinkBuild" label="Aus .ppttc erzeugen…" onAction="RethinkBuild" getImage="RethinkImage" tag="icon:ppttc"
+                    screentip="Aus .ppttc erzeugen"
+                    supertip="Wählt eine .ppttc-Datei, erzeugt daraus eine neue Präsentation und öffnet sie."/>
+          </box>
+          <box id="rethinkDataIcons" boxStyle="vertical">
+            <button id="rethinkApplySheets" label="Datenblätter übernehmen" showLabel="false" onAction="RethinkApplySheets" getImage="RethinkImage"
+                    tag="icon:refresh"
+                    screentip="Datenblätter übernehmen"
+                    supertip="Zeichnet alle Diagramme mit geändertem Datenblatt sofort neu (sonst geschieht das alle 0,3 Sekunden von selbst)."/>
+            <button id="rethinkName" label="Elementname setzen" showLabel="false" onAction="RethinkSetName" getImage="RethinkImage" tag="icon:link"
+                    screentip="Elementname setzen"
+                    supertip="Setzt den Alternativtext „rethink:&lt;Name&gt;“ auf die ausgewählten Formen. Unter diesem Namen füllt rethink sie aus einer .ppttc-Datei."/>
+            <button id="rethinkExcelLink" label="Excel-Verknüpfung" showLabel="false" enabled="false" getImage="RethinkImage" tag="icon:excellink"
+                    screentip="Excel-Verknüpfung" supertip="Diagramm mit einer Excel-Datei verknüpfen – geplant."/>
+          </box>
+        </group>
+
+        <group id="rethinkGroupText" label="Text">
+          <box id="rethinkTextRows" boxStyle="vertical">
+            <box id="rethinkTextRow1" boxStyle="horizontal">
+              <control idMso="Font"/>
+              <control idMso="FontSize"/>
+              <button id="rethinkAutofit" label="Text einpassen" showLabel="false" enabled="false" getImage="RethinkImage" tag="icon:autofit"
+                      screentip="Text einpassen" supertip="Schrift automatisch an die Form anpassen – geplant."/>
+            </box>
+            <box id="rethinkTextRow2" boxStyle="horizontal">
+              <control idMso="Bold" showLabel="false"/>
+              <control idMso="Italic" showLabel="false"/>
+              <control idMso="Underline" showLabel="false"/>
+              <control idMso="Subscript" showLabel="false"/>
+              <control idMso="Superscript" showLabel="false"/>
+              <menu id="rethinkMargins" label="Textabstände" showLabel="false" enabled="false" getImage="RethinkImage" tag="icon:margins"
+                    screentip="Textabstände" supertip="Innenabstände der Form – geplant.">
+                <button id="rethinkMarginsNone" label="Textabstände (geplant)" enabled="false" supertip="Noch nicht umgesetzt."/>
+              </menu>
+            </box>
+            <box id="rethinkTextRow3" boxStyle="horizontal">
+              <control idMso="AlignLeft" showLabel="false"/>
+              <control idMso="AlignCenter" showLabel="false"/>
+              <control idMso="AlignRight" showLabel="false"/>
+              <control idMso="IndentDecrease" showLabel="false"/>
+              <control idMso="IndentIncrease" showLabel="false"/>
+            </box>
+          </box>
+          <box id="rethinkTextList" boxStyle="vertical">
+            <control idMso="BulletsGallery" showLabel="false"/>
+            <control idMso="NumberingGallery" showLabel="false"/>
+            <box id="rethinkTextRow6" boxStyle="horizontal">
+              <control idMso="LineSpacingGalleryPowerPoint" showLabel="false"/>
+              <button id="rethinkParagraph" label="Absatz" showLabel="false" onAction="RethinkMso" getImage="RethinkImage"
+                      tag="icon:paragraph|mso:ParagraphDialog"
+                      screentip="Absatz" supertip="Öffnet den Absatzdialog."/>
+            </box>
+          </box>
+        </group>
+
+        <group id="rethinkGroupLayout" label=" ">
+          <menu id="rethinkLayout" label="Layout" size="large" getImage="RethinkImage" tag="icon:layout"
+                screentip="Layout" supertip="Markierte Formen ausrichten und verteilen.">
+            <control idMso="ObjectsAlignLeftSmart"/>
+            <control idMso="ObjectsAlignCenterHorizontalSmart"/>
+            <control idMso="ObjectsAlignRightSmart"/>
+            <menuSeparator id="rethinkLayoutSep1"/>
+            <control idMso="ObjectsAlignTopSmart"/>
+            <control idMso="ObjectsAlignMiddleVerticalSmart"/>
+            <control idMso="ObjectsAlignBottomSmart"/>
+            <menuSeparator id="rethinkLayoutSep2"/>
+            <control idMso="AlignDistributeHorizontally"/>
+            <control idMso="AlignDistributeVertically"/>
+          </menu>
+        </group>
+
+        <group id="rethinkGroupColor" label=" ">
+          <menu id="rethinkColor" label="Farbe" size="large" getImage="RethinkImage" tag="icon:color"
+                screentip="Farbe" supertip="Design des ausgewählten Zeitplans wählen.">
+            <button id="rethinkDesignStandard" label="Zeitplan-Design: Standard" onAction="RethinkCommand" tag="cmd:design=standard"
+                    screentip="Design Standard" supertip="Wendet das Design „Standard“ auf den ausgewählten Zeitplan an."/>
+            <button id="rethinkDesignModern" label="Zeitplan-Design: Modern" onAction="RethinkCommand" tag="cmd:design=modern"
+                    screentip="Design Modern" supertip="Wendet das Design „Modern“ auf den ausgewählten Zeitplan an."/>
+            <button id="rethinkDesignContrast" label="Zeitplan-Design: Kontrast" onAction="RethinkCommand" tag="cmd:design=contrast"
+                    screentip="Design Kontrast" supertip="Wendet das Design „Kontrast“ auf den ausgewählten Zeitplan an."/>
+            <button id="rethinkDesignMinimal" label="Zeitplan-Design: Minimal" onAction="RethinkCommand" tag="cmd:design=minimal"
+                    screentip="Design Minimal" supertip="Wendet das Design „Minimal“ auf den ausgewählten Zeitplan an."/>
+          </menu>
+        </group>
+
+        <group id="rethinkGroupQuality" label=" ">
+          <menu id="rethinkQuality" label="Qualität" size="large" getImage="RethinkImage" tag="icon:quality"
+                screentip="Qualität" supertip="Folien auf Konsistenz prüfen – geplant.">
+            <button id="rethinkQualityCheck" label="Folien prüfen (geplant)" enabled="false" supertip="Noch nicht umgesetzt."/>
+          </menu>
+        </group>
+
+        <group id="rethinkGroupCollab" label=" ">
+          <menu id="rethinkCollab" label="Zusammenarbeit" size="large" getImage="RethinkImage" tag="icon:collab"
+                screentip="Zusammenarbeit" supertip="Teilen und Kommentare – geplant.">
+            <button id="rethinkCollabShare" label="Teilen und Kommentare (geplant)" enabled="false" supertip="Noch nicht umgesetzt."/>
+          </menu>
+        </group>
+
+        <group id="rethinkGroupMore" label=" ">
+          <menu id="rethinkMore" label="Mehr" size="large" getImage="RethinkImage" tag="icon:more"
+                screentip="Mehr" supertip="Info, Hilfe und weitere Befehle.">
+            <button id="rethinkAbout" label="Info / Version" onAction="RethinkAbout"
+                    screentip="Info / Version" supertip="Zeigt Name und Version von rethink."/>
+            <button id="rethinkHelp" label="Hilfe (README)" onAction="RethinkAbout"
+                    screentip="Hilfe" supertip="Zeigt, wo die Anleitung liegt."/>
+            <menuSeparator id="rethinkMoreSep"/>
+            <button id="rethinkMoreChart" label="Natives Diagramm einfügen" imageMso="ChartInsert" onAction="RethinkInsertChart"
+                    screentip="Natives Diagramm einfügen"
+                    supertip="Fügt ein natives Säulendiagramm ein und benennt es Chart1, Chart2 …"/>
+          </menu>
+        </group>
+
       </tab>
     </tabs>
   </ribbon>
