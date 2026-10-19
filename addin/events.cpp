@@ -713,6 +713,17 @@ LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         case WM_CHAR:
             if (wParam == VK_RETURN || wParam == VK_TAB || wParam == VK_ESCAPE) return 0;  // kein Signalton
             break;
+        case WM_NCPAINT: {  // blauer Rahmen: das Feld ist klar als Eingabe erkennbar
+            HDC dc = GetWindowDC(hwnd);
+            RECT r;
+            GetWindowRect(hwnd, &r);
+            OffsetRect(&r, -r.left, -r.top);
+            HBRUSH blue = CreateSolidBrush(RGB(37, 120, 235));
+            FrameRect(dc, &r, blue);
+            DeleteObject(blue);
+            ReleaseDC(hwnd, dc);
+            return 0;
+        }
         case WM_KILLFOCUS:
             if (!g_editor.closing) {  // Fokusverlust übernimmt: Text jetzt festhalten, die Übernahme folgt gepostet
                 captureEditor();
@@ -748,7 +759,7 @@ void openCellEditor(const OverlayHandle& handle) {
     g_editor = {};
     g_editor.row = handle.row, g_editor.col = handle.column, g_editor.original = info.text, g_editor.element = g_element, g_editor.map = g_overlayMap;
     // ES_MULTILINE nur, damit der Text senkrecht im Feld sitzt (EM_SETRECT); Enter und Tab fängt editorProc ab
-    g_editor.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, L"EDIT", info.text.c_str(), WS_POPUP | WS_VISIBLE | ES_MULTILINE | ES_AUTOHSCROLL | ES_LEFT, cell.left,
+    g_editor.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, L"EDIT", info.text.c_str(), WS_POPUP | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOHSCROLL | ES_LEFT, cell.left,
                                     top, width, height, powerPointWindow(), nullptr, GetModuleHandleW(nullptr), nullptr);
     if (!g_editor.hwnd) {
         DeleteObject(font);

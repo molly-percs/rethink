@@ -23,7 +23,8 @@ try {
     $xml = Get-Content -Raw -Encoding UTF8 (Join-Path $PSScriptRoot '..\addin\ribbon.xml')
     $badMso = @()
     foreach ($id in ([regex]::Matches($xml, '(?<=\btag="[^"]*)mso:([A-Za-z0-9_]+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)) {
-        try { "mso:$id -> " + $pp.CommandBars.GetLabelMso($id) } catch { $badMso += $id }
+        # [string]: mit dem PSObject aus der Pipeline hängt der COM-Aufruf
+        try { "mso:$id -> " + $pp.CommandBars.GetLabelMso([string]$id) } catch { $badMso += $id }
     }
     $api = $pp.COMAddIns.Item('rethink.addin').Object
     $status = $api.RibbonStatus()

@@ -354,14 +354,15 @@ void render(bool move) {
             case HandleStyle::RowGrip: {
                 const bool lit = hotRow && hot->row == h.row;
                 canvas.fill(r, kBlue, lit ? 0.14 : 0.004);  // auch unscheinbar „da“, damit das Fenster die Maus bekommt
-                // Punkte immer deutlich sichtbar (dunkelgrau); bei Maus über der Zeile blau, dazu links das Verschiebe-Symbol
-                const int gap = std::max(1, scaled(owner, 2));
-                const int dot = std::max(2, std::min(scaled(owner, 3), (static_cast<int>(r.bottom - r.top) - 2 * gap - 2) / 3));
-                const int dotsW = drawDots(canvas, r, dot, gap, lit ? kBlue : RGB(64, 64, 64), lit ? 1.0 : 0.7);
+                // Punkte immer deutlich sichtbar (dunkelgrau); bei Maus über der Zeile statt der Punkte ein großes blaues Verschiebe-Symbol
                 if (lit) {
-                    const int s = std::min<int>(r.right - r.left - dotsW - scaled(owner, 4), std::min<int>(scaled(owner, 12), r.bottom - r.top - 2));
-                    const RECT symbol{r.left + scaled(owner, 1), (r.top + r.bottom - s) / 2, r.left + scaled(owner, 1) + s, (r.top + r.bottom + s) / 2};
-                    if (s >= scaled(owner, 7)) drawMoveArrow(canvas, symbol, kBlue, 1.0, std::max(1, scaled(owner, 1)));
+                    const int s = std::min<int>({r.right - r.left - 2, r.bottom - r.top - 2, scaled(owner, 18)});
+                    const int cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+                    drawMoveArrow(canvas, {cx - s / 2, cy - s / 2, cx - s / 2 + s, cy - s / 2 + s}, kBlue, 1.0, std::max(2, scaled(owner, 2)));
+                } else {
+                    const int gap = std::max(1, scaled(owner, 2));
+                    const int dot = std::max(2, std::min(scaled(owner, 3), (static_cast<int>(r.bottom - r.top) - 2 * gap - 2) / 3));
+                    drawDots(canvas, r, dot, gap, RGB(64, 64, 64), 0.7);
                 }
                 break;
             }
