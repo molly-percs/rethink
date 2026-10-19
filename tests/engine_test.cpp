@@ -643,6 +643,85 @@ void testGanttEdit() {
     check(o.gantt.items.size() == 1 && item.table[4][1].kind == CellKind::Empty, "Elemente löschen");
 }
 
+// Einzelne Trennlinien: Zeichnung, Grenzen der Skala, Wandern mit den Zeilen, Umschalten, ppttc
+void testGanttLines() {
+    const Box box{0, 0, 9000000, 4000000};
+    DataItem item = plan();  // Zeilen 2 Analyse, 3 Konzept, 4 Umsetzung
+    ChartOptions o = ganttOptions();
+    o.gantt.rowLines = {3};
+    o.gantt.dateLines = {L"2026-11-16", L"2020-01-01"};  // die zweite liegt außerhalb des Bereichs
+    const Drawing d = layoutChart(item, o, box);
+    const Prim* rl = find(d, "line row r3");
+    const Prim* top3 = find(d, "activity r3");
+    check(rl && rl->kind == Prim::Kind::Line && rl->h == 0 && rl->y == top3->y && rl->x == box.x && rl->x + rl->w == box.x + box.w && rl->strokePt == 0.75 &&
+              !rl->dashed && !rl->dotted && rl->stroke.scheme == L"tx1",
+          "Trennlinie: waagerecht an der Oberkante der Zeile über Beschriftungen und Zeitbereich, 0,75 pt, durchgezogen, Gitterfarbe");
+    const Prim* dl = find(d, "line date 2026-11-16");
+    const Prim* bottomRule = find(d, "milestone row rule");
+    check(dl && dl->w == 0 && std::llabs(dl->x - std::llround(d.axis.xOf(*parseIsoDate(L"2026-11-16")))) <= 1 && dl->y == find(d, "activity r2")->y &&
+              dl->y + dl->h > bottomRule->y && !find(d, "line date 2020-01-01") && !find(d, "line row r2"),
+          "Trennlinie: senkrecht am Beginn des Tages von den Zeilen bis unter die Meilensteinzeile; außerhalb des Bereichs nichts");
+    check(!d.dateEdges.empty() && d.dateEdges.front().date == static_cast<double>(daysFromCivil(2026, 11, 2)) &&
+              std::llabs(d.dateEdges.front().x - std::llround(d.axis.xOf(d.dateEdges.front().date))) <= 1,
+          "Grenzen der feinsten Skala (Wochen) im Zeitbereich für Hover und Rechtsklick");
+
+    // Zeilenlinien wandern mit ihrer Zeile
+    ChartOptions e = ganttOptions();
+    e.gantt.rowLines = {3, 4};
+    insertGanttRow(item, e, 3, L"Neu");
+    check(e.gantt.rowLines == std::vector<int>({4, 5}), "Zeile einfügen: Linien rücken mit ihrer Zeile");
+    deleteGanttRow(item, e, 3);
+    check(e.gantt.rowLines == std::vector<int>({3, 4}), "Zeile löschen: Linien rücken zurück");
+    deleteGanttRow(item, e, 3);
+    check(e.gantt.rowLines == std::vector<int>({3}), "Zeile mit Linie gelöscht: die Linie entfällt");
+    item = plan();
+    e.gantt.rowLines = {3};
+    check(moveGanttRow(item, e, 3, 1) && e.gantt.rowLines == std::vector<int>({4}), "Zeile nach unten: die Linie geht mit");
+    check(moveGanttRowTo(item, e, 4, 2) && e.gantt.rowLines.empty(), "Zeile an die oberste Stelle gezogen: ihre Linie läge über der ersten Zeile und entfällt");
+    e.gantt.rowLines = {4};
+    check(moveGanttRowTo(item, e, 2, 4) && e.gantt.rowLines == std::vector<int>({3}), "Zeile nach unten gezogen: Linie der Zwischenzeile rückt nach");
+    shiftGanttRows(e, 3, 1);
+    check(e.gantt.rowLines == std::vector<int>({4}), "Datenblatt: Zeile eingefügt, Linie rückt");
+    shiftGanttRows(e, 4, -1);
+    check(e.gantt.rowLines.empty(), "Datenblatt: Zeile gelöscht, Linie entfällt");
+
+    // Umschalten
+    ChartOptions t = ganttOptions();
+    DataItem plain = plan();
+    check(toggleGanttRowLine(plain, t, 3) && t.gantt.rowLines == std::vector<int>({3}) && !toggleGanttRowLine(plain, t, 3) && t.gantt.rowLines.empty(),
+          "Zeilenlinie umschalten: dazu, dann weg");
+    bool threw = false;
+    try {
+        toggleGanttRowLine(plain, t, 2);  // über der ersten Zeile
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    check(threw, "Zeilenlinie über der ersten Zeile ist ungültig");
+    check(toggleGanttDateLine(t, L"2026-11-09") && t.gantt.dateLines == std::vector<std::wstring>({L"2026-11-09"}) && !toggleGanttDateLine(t, L"2026-11-09") &&
+              t.gantt.dateLines.empty(),
+          "Datumslinie umschalten: dazu, dann weg");
+
+    // .ppttc: lesen und (für die Datenblattbearbeitung) schreiben
+    t.gantt.rowLines = {3, 4};
+    t.gantt.dateLines = {L"2026-11-09"};
+    const ChartOptions back = parseChartOptions(mergeChartJson(L"{\"type\":\"gantt\"}", ganttEditsJson(t.gantt)));
+    check(back.gantt.rowLines == t.gantt.rowLines && back.gantt.dateLines == t.gantt.dateLines, "rowLines und dateLines überstehen das Speichern im Modell");
+    bool rejected = false;
+    try {
+        parseChartOptions(L"{\"type\":\"gantt\",\"rowLines\":[2]}");
+    } catch (const std::exception&) {
+        rejected = true;
+    }
+    check(rejected, "rowLines unter 3 wird abgelehnt");
+    rejected = false;
+    try {
+        parseChartOptions(L"{\"type\":\"gantt\",\"dateLines\":[\"gestern\"]}");
+    } catch (const std::exception&) {
+        rejected = true;
+    }
+    check(rejected, "dateLines erwartet ISO-Daten");
+}
+
 }  // namespace
 
 int main() {
@@ -654,6 +733,7 @@ int main() {
     testGanttLayout();
     testGanttCategories();
     testGanttEdit();
+    testGanttLines();
     testDatasheetRoundtrip();
     testEAtEnd();
     testEMid();

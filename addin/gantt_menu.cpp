@@ -169,6 +169,18 @@ std::vector<Entry> buildMenu(const GanttState& s, const GanttHit& hit) {
     const bool onRow = hit.row >= gantt::kFirstActivityRow;
     std::vector<Entry> m;
 
+    // Grenze unter der Maus: einzelne Trennlinie genau hier einfügen bzw. entfernen
+    if (hit.lineRow >= 0) {
+        const bool present = std::find(g.rowLines.begin(), g.rowLines.end(), hit.lineRow) != g.rowLines.end();
+        m.push_back(item(present ? L"Waagerechte Trennlinie hier entfernen" : L"Waagerechte Trennlinie hier einfügen", std::format(L"rowLine={}", hit.lineRow)));
+    }
+    if (hit.hasLineDate) {
+        const std::wstring day = isoDate(hit.lineDate);
+        const bool present = std::find(g.dateLines.begin(), g.dateLines.end(), day) != g.dateLines.end();
+        m.push_back(item(present ? L"Senkrechte Trennlinie hier entfernen" : L"Senkrechte Trennlinie hier einfügen", L"dateLine=" + day));
+    }
+    if (hit.lineRow >= 0 || hit.hasLineDate) m.push_back(separator());
+
     // Element unter der Maus
     if (s.targetKind == "bar") {
         m.push_back(submenu(L"Form", barShapeEntries(s)));

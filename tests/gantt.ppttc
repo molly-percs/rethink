@@ -26,7 +26,7 @@
 				"name": "Bridge",
 				"chart": {
 					"type": "gantt", "start": "2026-11-30", "end": "2027-01-10", "weekends": "shaded", "today": "2026-12-16",
-					"rowSeparators": true, "milestoneLines": true, "shadedRows": [3],
+					"rowSeparators": true, "milestoneLines": true, "shadedRows": [3], "rowLines": [4], "dateLines": ["2026-12-14"],
 					"items": [
 						{ "kind": "chevron", "row": 2, "start": "2026-12-01", "end": "2026-12-12", "text": "Phase 1" },
 						{ "kind": "chevron", "row": 2, "start": "2026-12-12", "end": "2027-01-09", "text": "Phase 2", "fill": "#ED7D31" },

@@ -60,6 +60,12 @@ void setGanttText(DataItem& item, int row, int column, const std::wstring& text)
 // Vorgänger (Spalte 7) umschalten: ist `predecessor` eingetragen, wird er entfernt, sonst angehängt. Liefert den neuen Zustand.
 bool toggleGanttLink(DataItem& item, int row, const std::wstring& predecessor);
 
+// Trennlinie an der Oberkante der Zeile `row` (ab der zweiten Aktivitätszeile) bzw. am Beginn des Tages `isoDay` umschalten:
+// fehlt sie, kommt sie dazu, sonst entfällt sie. Liefert den neuen Zustand (true = Linie vorhanden); wirft bei ungültiger Zeile/Datum.
+// Zeilenlinien gehören zur Zeile und wandern beim Einfügen, Löschen, Verschieben und Sortieren mit (wie Zeilenschattierungen).
+bool toggleGanttRowLine(const DataItem& item, ChartOptions& options, int row);
+bool toggleGanttDateLine(ChartOptions& options, const std::wstring& isoDay);
+
 // Aussehen des Elements hinter einem Ziel (Zeilenstil des Datenblatt-Balkens/-Meilensteins oder Stil des freien Elements);
 // legt den Zeilenstil bei Bedarf an.
 ShapeStyle& ganttStyle(ChartOptions& options, const GanttTarget& target);

@@ -303,7 +303,7 @@ void render(bool move) {
         OffsetRect(&area, -g_origin.x, -g_origin.y);
         canvas.fill(area, kBlue, 0.07);
         if (hot->action == OverlayAction::CellEdit) {
-            RECT r = hot->rect;
+            RECT r = IsRectEmpty(&hot->cell) ? hot->rect : hot->cell;
             OffsetRect(&r, -g_origin.x, -g_origin.y);
             canvas.fill(r, kBlue, 0.16);
             frame(canvas, r, 0.9);
@@ -343,6 +343,13 @@ void render(bool move) {
                 break;
             }
         }
+    }
+
+    // Grenze unter der Maus (Zeilen-/Skalenrand): helles Band, an dem eine Trennlinie eingefügt werden kann
+    if (!IsRectEmpty(&content.line)) {
+        RECT r = content.line;
+        OffsetRect(&r, -g_origin.x, -g_origin.y);
+        canvas.fill(r, kBlue, 0.3);
     }
 
     // Einfügelinie beim Ziehen einer Zeile
@@ -402,6 +409,19 @@ void showOverlay(HWND owner, const OverlayContent& content, OverlayCallback call
 
 void overlayHoverCheck() {
     if (g_window && IsWindowVisible(g_window) && !g_press.active) updateHover();
+}
+
+void setOverlayLine(const RECT& line) {
+    const bool empty = IsRectEmpty(&line) != 0;
+    if (empty ? IsRectEmpty(&g_content.line) != 0 : EqualRect(&g_content.line, &line) != 0) return;
+    g_content.line = empty ? RECT{} : line;
+    if (g_window && IsWindowVisible(g_window)) render(false);
+}
+
+const OverlayHandle* overlayHoverAt(POINT screen) {
+    g_hover = hitHandle(screen);
+    if (g_window && IsWindowVisible(g_window)) render(false);
+    return g_hover >= 0 ? &g_content.handles[g_hover] : nullptr;
 }
 
 void hideOverlay() {

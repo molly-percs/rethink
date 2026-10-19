@@ -98,6 +98,12 @@ struct ColumnBand {
     Emu x = 0, w = 0;
 };
 
+// Zeitplan: Grenze zwischen zwei Einheiten der feinsten Skala (Beginn des Tages `date`, Tage seit 1970) bei x.
+struct DateEdge {
+    double date = 0;
+    Emu x = 0;
+};
+
 struct Drawing {
     Box bounds;
     std::vector<Prim> prims;
@@ -106,6 +112,7 @@ struct Drawing {
     GanttAxis axis;                                // Zeitplan: Zeitachse (für Ziehen in Tagen)
     std::vector<RowBand> rows;                     // Zeitplan: Zeilen
     std::vector<ColumnBand> columns;               // Zeitplan: gezeigte Beschriftungsspalten
+    std::vector<DateEdge> dateEdges;               // Zeitplan: senkrechte Grenzen der feinsten Skala im Zeitbereich (für Trennlinien)
     Emu scaleTop = 0, scaleBottom = 0;             // Zeitplan: Band der Kalenderskalen
     std::vector<TimeUnit> scales;                  // Zeitplan: gezeigte Skalen (grob → fein)
 };

@@ -20,6 +20,7 @@ $cases = @(
     @{ Name = 'unbekannter-name'; Json = "[{`"template`":`"$template`",`"data`":[{`"name`":`"Nirgends`",`"table`":[[{`"string`":`"x`"}]]}]}]"; Exit = 0; Expect = "Element 'Nirgends' wurde in der Vorlage nicht gefunden" }
     @{ Name = 'gantt-option';    Json = "[{`"template`":`"$chartTemplate`",`"data`":[{`"name`":`"Bridge`",`"chart`":{`"type`":`"gantt`",`"weekends`":`"bunt`"},`"table`":[[null]]}]}]"; Exit = 2; Expect = '"weekends" muss einer der Werte "plain", "shaded", "hidden" sein' }
     @{ Name = 'gantt-element';   Json = "[{`"template`":`"$chartTemplate`",`"data`":[{`"name`":`"Bridge`",`"chart`":{`"type`":`"gantt`",`"items`":[{`"kind`":`"bar`",`"row`":2,`"start`":`"2026-01-05`"}]},`"table`":[[null]]}]}]"; Exit = 2; Expect = 'chart.items[0]: "end" fehlt' }
+    @{ Name = 'gantt-zeilenlinie'; Json = "[{`"template`":`"$chartTemplate`",`"data`":[{`"name`":`"Bridge`",`"chart`":{`"type`":`"gantt`",`"rowLines`":[2]},`"table`":[[null]]}]}]"; Exit = 2; Expect = '"rowLines" erwartet Zeilennummern ab 3' }
 )
 
 $failed = 0

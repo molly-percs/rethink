@@ -695,6 +695,22 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
         d.prims.push_back(p);
     }
 
+    // Einzeln gesetzte Trennlinien: waagerecht an der Oberkante einer Zeile (über Beschriftungen und Zeitbereich),
+    // senkrecht am Beginn eines Tages (von den Zeilen bis unter die Meilensteinzeile); Gitterfarbe, 0,75 pt, durchgezogen
+    for (int r : g.rowLines) {
+        Emu y, h;
+        if (r > kFirstActivityRow && L.band(r, y, h)) d.prims.push_back(line(b.x, y, chartRight, y, spec.grid, 0.75, std::format("line row r{}", r)));
+    }
+    for (const std::wstring& ds : g.dateLines) {
+        const auto day = parseIsoDate(ds);
+        if (!day || *day <= t0 || *day >= t1 || rows == 0) continue;
+        const std::wstring iso = isoDate(std::floor(*day));
+        const Emu lx = L.x(std::floor(*day));
+        std::string role = "line date ";  // ISO-Datum ist reines ASCII
+        for (wchar_t ch : iso) role += static_cast<char>(ch);
+        d.prims.push_back(line(lx, L.rowsTop, lx, L.msTop + L.msRowH, spec.grid, 0.75, role));
+    }
+
     // 3. Skalen: Beschriftungen je Einheit, Trennstriche, Linien unter jeder Skala
     for (size_t k = 0; k < scales.size(); ++k) {
         const TimeUnit u = scales[k];
@@ -940,6 +956,14 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
     for (int r = kFirstActivityRow; r < static_cast<int>(item.table.size()); ++r) d.rows.push_back({r, L.rowsTop + (r - kFirstActivityRow) * L.rowH, L.rowH});
     d.rows.push_back({kMilestoneRow, L.msTop, L.msRowH});
     for (auto& c : columns) d.columns.push_back({c.col, c.x, c.w});
+    // Grenzen der feinsten Skala: Orte für einzelne senkrechte Trennlinien (nur, wenn eine Einheit mindestens 3 pt breit ist)
+    if (a.emuPerDay() * minUnitDays(scales.back()) >= 3 * kEmuPerPt)
+        for (long long s = nextUnit(unitStart(t0, scales.back(), g.weekStart), scales.back()); static_cast<double>(s) < t1; s = nextUnit(s, scales.back())) {
+            if (static_cast<double>(s) <= t0) continue;
+            const Emu ex = L.x(static_cast<double>(s));
+            if (!d.dateEdges.empty() && d.dateEdges.back().x == ex) d.dateEdges.back().date = static_cast<double>(s);  // ausgeblendete Wochenenden: der Arbeitstag zählt
+            else d.dateEdges.push_back({static_cast<double>(s), ex});
+        }
     d.scaleTop = b.y, d.scaleBottom = L.rowsTop;
     d.scales = scales;
     d.axis = a;

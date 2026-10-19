@@ -43,6 +43,7 @@ struct OverlayHandle {
     int dirX = 0, dirY = -1;  // Bildschirmrichtung, in der der Mausweg positiv zählt
     int pointing = 0;         // Dreieck/Pfeil: 0 = oben, 1 = unten, 2 = links, 3 = rechts
     RECT area{};              // Zeile/Zelle: Beschriftungsbereich der Zeile (heller Streifen bei Maus darüber)
+    RECT cell{};              // Zelle: volle Zelle für das Leuchten (rect kann schmaler sein, um PowerPoints Anfasser freizulassen)
 };
 
 struct OverlayContent {
@@ -52,6 +53,7 @@ struct OverlayContent {
     POINT tooltipAt{};     // Bildschirmpunkt (Mitte unten der Kurzinfo)
     RECT marker{};         // blaue Einfügelinie beim Ziehen einer Zeile (leer = keine)
     RECT band{};           // blaues Band über der Skala (leer = keins)
+    RECT line{};           // helles blaues Band an der Grenze unter der Maus (Trennlinie einfügen; leer = keins)
 };
 
 // Geste an einem Griff. Ein Griff wird geklickt (Loslassen ohne Bewegung) oder gezogen: Drag kommt bei jeder
@@ -67,6 +69,10 @@ void hideOverlay();
 bool overlayVisible();
 // Prüft, ob die Maus noch über demselben Griff liegt (Maus-Hook meldet Bewegungen außerhalb des Overlays) und zeichnet bei Änderung neu.
 void overlayHoverCheck();
+// Setzt das helle Band an der Grenze unter der Maus (Bildschirmpixel, leer = keins) und zeichnet nur bei Änderung neu.
+void setOverlayLine(const RECT& line);
+// Für Tests: tut so, als läge die Maus bei `screen`; liefert den Griff dort (gültig bis zum nächsten Aufbau) oder nullptr.
+const OverlayHandle* overlayHoverAt(POINT screen);
 // Fensterrechteck des Overlays (für Tests).
 RECT overlayRect();
 HWND overlayWindow();

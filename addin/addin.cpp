@@ -88,6 +88,7 @@ enum : DISPID {
     kGanttMenu,
     kGanttToolbar,
     kGanttRightClick,
+    kGanttHover,
 };
 
 struct Member {
@@ -111,6 +112,7 @@ constexpr Member kMembers[] = {
     {L"GanttToggle", kGanttToggle}, {L"GanttPressed", kGanttPressed}, {L"SetGanttDates", kSetGanttDates}, {L"GanttHit", kGanttHit},
     {L"OpenCalendar", kOpenCalendar}, {L"CloseCalendar", kCloseCalendar}, {L"CalendarPick", kCalendarPick}, {L"RethinkRibbonLoad", kOnRibbonLoad},
     {L"RibbonStatus", kRibbonStatus}, {L"ActivateTab", kActivateTab}, {L"GanttMenu", kGanttMenu}, {L"GanttToolbar", kGanttToolbar}, {L"GanttRightClick", kGanttRightClick},
+    {L"GanttHover", kGanttHover},
 };
 
 // Kontextmenü „rethink-Zeitplan“ (im Original: Kontextmenüs von Zeilen, Elementen und Skalen). Steuerelement-IDs
@@ -262,9 +264,9 @@ GanttHit hitArg(IDispatch* app, const DISPPARAMS* params, UINT index) {
 }
 
 std::wstring hitText(const GanttHit& h) {
-    return std::format(L"gueltig={} zeile={} datum={} element={} skala={} beschriftung={}", h.valid, h.row, h.hasDate ? engine::isoDate(h.date) : L"-",
-                       h.role.empty() ? L"-" : widen(h.role), h.inScale,
-                       h.label.empty() ? L"-" : widen(h.label));
+    return std::format(L"gueltig={} zeile={} datum={} element={} skala={} beschriftung={} trennzeile={} trenndatum={}", h.valid, h.row,
+                       h.hasDate ? engine::isoDate(h.date) : L"-", h.role.empty() ? L"-" : widen(h.role), h.inScale,
+                       h.label.empty() ? L"-" : widen(h.label), h.lineRow, h.hasLineDate ? engine::isoDate(h.lineDate) : L"-");
 }
 
 template <class F>
@@ -495,6 +497,7 @@ public:
             case kGanttRightClick:
                 setString(result, simulateGanttRightClick(doubleArg(params, 0), doubleArg(params, 1), stringArg(params, 2, true)));
                 return S_OK;
+            case kGanttHover: setString(result, simulateGanttHover(doubleArg(params, 0), doubleArg(params, 1))); return S_OK;
             case kGanttToolbar: setString(result, ganttToolbarText(app_.Get(), hitArg(app_.Get(), params, 0))); return S_OK;
             case kGanttHit: setString(result, hitText(ganttHitAtPoint(app_.Get(), doubleArg(params, 0), doubleArg(params, 1)))); return S_OK;
             case kOpenCalendar: openGanttCalendar(app_.Get(), narrow(stringArg(params, 0, true))); return S_OK;

@@ -37,14 +37,23 @@ void clearCell(DataItem& item, int r, int c) {
     if (Cell* cell = const_cast<Cell*>(cellIf(item, r, c))) *cell = Cell{};
 }
 
+// Eine Linie über der ersten Aktivitätszeile gibt es nicht (dort liegt die Regel der Skala): solche Einträge entfallen.
+void dropFirstRowLines(ChartOptions& options) {
+    auto& lines = options.gantt.rowLines;
+    lines.erase(std::remove_if(lines.begin(), lines.end(), [](int r) { return r <= kFirstActivityRow; }), lines.end());
+}
+
 // Elementzeilen ab `from` um `delta` verschieben (Einfügen/Löschen von Zeilen).
 void shiftRows(ChartOptions& options, int from, int delta) {
     for (auto& it : options.gantt.items)
         if (it.row >= from) it.row += delta;
     for (auto& r : options.gantt.shadedRows)
         if (r >= from) r += delta;
+    for (auto& r : options.gantt.rowLines)
+        if (r >= from) r += delta;
     for (auto& s : options.gantt.rowStyles)
         if (s.row >= from) s.row += delta;
+    dropFirstRowLines(options);
 }
 
 // "bar r12" mit Präfix "bar r" → 12; genau Präfix + Zahl.
@@ -206,6 +215,8 @@ void deleteGanttRow(DataItem& item, ChartOptions& options, int row) {
                 items.end());
     auto& shaded = options.gantt.shadedRows;
     shaded.erase(std::remove(shaded.begin(), shaded.end(), row), shaded.end());
+    auto& lines = options.gantt.rowLines;
+    lines.erase(std::remove(lines.begin(), lines.end(), row), lines.end());
     auto& styles = options.gantt.rowStyles;
     styles.erase(std::remove_if(styles.begin(), styles.end(), [&](const RowStyle& s) { return s.row == row; }), styles.end());
     shiftRows(options, row + 1, -1);
@@ -225,10 +236,15 @@ bool moveGanttRow(DataItem& item, ChartOptions& options, int row, int delta) {
         if (r == row) r = target;
         else if (r == target) r = row;
     }
+    for (auto& r : options.gantt.rowLines) {
+        if (r == row) r = target;
+        else if (r == target) r = row;
+    }
     for (auto& s : options.gantt.rowStyles) {
         if (s.row == row) s.row = target;
         else if (s.row == target) s.row = row;
     }
+    dropFirstRowLines(options);
     return true;
 }
 
@@ -257,7 +273,9 @@ bool moveGanttRowTo(DataItem& item, ChartOptions& options, int row, int target) 
     };
     for (auto& it : options.gantt.items) remap(it.row);
     for (auto& r : options.gantt.shadedRows) remap(r);
+    for (auto& r : options.gantt.rowLines) remap(r);
     for (auto& s : options.gantt.rowStyles) remap(s.row);
+    dropFirstRowLines(options);
     if (categories) setGanttText(item, target, kCategoryCol, category);  // in die Kategorie der Ablagestelle
     return true;
 }
@@ -363,8 +381,39 @@ void sortGanttByCategory(DataItem& item, ChartOptions& options, const std::vecto
         if (it.row >= first && it.row < static_cast<int>(newIndex.size())) it.row = newIndex[it.row];
     for (auto& r : options.gantt.shadedRows)
         if (r >= first && r < static_cast<int>(newIndex.size())) r = newIndex[r];
+    for (auto& r : options.gantt.rowLines)
+        if (r >= first && r < static_cast<int>(newIndex.size())) r = newIndex[r];
     for (auto& s : options.gantt.rowStyles)
         if (s.row >= first && s.row < static_cast<int>(newIndex.size())) s.row = newIndex[s.row];
+    dropFirstRowLines(options);
+}
+
+bool toggleGanttRowLine(const DataItem& item, ChartOptions& options, int row) {
+    if (row <= kFirstActivityRow || row >= static_cast<int>(item.table.size())) throw std::invalid_argument("Eine Trennlinie gibt es nur zwischen zwei Aktivitätszeilen.");
+    auto& lines = options.gantt.rowLines;
+    const auto it = std::find(lines.begin(), lines.end(), row);
+    if (it != lines.end()) {
+        lines.erase(it);
+        return false;
+    }
+    lines.push_back(row);
+    std::sort(lines.begin(), lines.end());
+    return true;
+}
+
+bool toggleGanttDateLine(ChartOptions& options, const std::wstring& isoDay) {
+    const auto day = parseIsoDate(isoDay);
+    if (!day) throw std::invalid_argument("Datum als ISO angeben, z. B. 2026-11-09");
+    const std::wstring iso = isoDate(std::floor(*day));
+    auto& lines = options.gantt.dateLines;
+    const auto it = std::find(lines.begin(), lines.end(), iso);
+    if (it != lines.end()) {
+        lines.erase(it);
+        return false;
+    }
+    lines.push_back(iso);
+    std::sort(lines.begin(), lines.end());
+    return true;
 }
 
 ShapeStyle& ganttStyle(ChartOptions& options, const GanttTarget& target) {
@@ -388,6 +437,8 @@ void shiftGanttRows(ChartOptions& options, int from, int delta) {
                     items.end());
         auto& shaded = options.gantt.shadedRows;
         shaded.erase(std::remove_if(shaded.begin(), shaded.end(), gone), shaded.end());
+        auto& lines = options.gantt.rowLines;
+        lines.erase(std::remove_if(lines.begin(), lines.end(), gone), lines.end());
         auto& styles = options.gantt.rowStyles;
         styles.erase(std::remove_if(styles.begin(), styles.end(), [&](const RowStyle& s) { return gone(s.row); }), styles.end());
         shiftRows(options, to, delta);

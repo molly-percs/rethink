@@ -17,6 +17,7 @@
 #include <ocidl.h>
 #include <shellapi.h>
 
+#include <charconv>
 #include <cmath>
 #include <exception>
 #include <filesystem>
@@ -431,6 +432,11 @@ void storeGanttGeometry(IDispatch* group, const Drawing& d) {
                                      rowsTop, rowH, rows, pt(d.bounds.x));
     value += std::format(L";{}", d.columns.size());  // Spalten: Anzahl, dann je Spalte Index;Rand;Breite
     for (auto& c : d.columns) value += std::format(L";{};{};{}", c.col, pt(c.x), pt(c.w));
+    double bottom = 0;  // Unterkante der Meilensteinzeile; dann Grenzen der feinsten Skala (Anzahl, je Rand;Tag)
+    for (auto& r : d.rows)
+        if (r.row == gantt::kMilestoneRow) bottom = pt(r.y + r.h);
+    value += std::format(L";{};{}", bottom, d.dateEdges.size());
+    for (auto& e : d.dateEdges) value += std::format(L";{};{}", pt(e.x), e.date);
     if (tagValue(group, kGanttTag) != value) setTag(group, kGanttTag, value);
 }
 
@@ -1445,6 +1451,9 @@ GanttGeometry geometryOfDrawing(const Drawing& d) {
         }
     g.labelsLeft = pt(d.bounds.x);
     for (auto& c : d.columns) g.columns.push_back({c.col, pt(c.x), pt(c.w)});
+    for (auto& r : d.rows)
+        if (r.row == gantt::kMilestoneRow) g.bottom = pt(r.y + r.h);
+    for (auto& e : d.dateEdges) g.edges.push_back({pt(e.x), e.date});
     return g;
 }
 
@@ -1521,6 +1530,16 @@ GanttGeometry ganttGeometryOf(IDispatch* element) {
                 c.left += dx;
                 g.columns.push_back(c);
             }
+        size_t edges = 0;
+        if (in >> sep >> g.bottom >> sep >> edges) {
+            g.bottom += dy;
+            for (size_t i = 0; i < edges; ++i) {
+                GanttEdge e;
+                if (!(in >> sep >> e.x >> sep >> e.date)) break;
+                e.x += dx;
+                g.edges.push_back(e);
+            }
+        }
     }
     return g;
 }
@@ -1644,7 +1663,7 @@ void endGanttDrag(bool cancel) {
     syncDatasheets(g.group.Get(), item.table);
 }
 
-GanttHit ganttHitAt(IDispatch* element, double x, double y) {
+GanttHit ganttHitAt(IDispatch* element, double x, double y, double lineTolerance) {
     GanttHit hit;
     if (!elementInfo(element).gantt) return hit;
     const GanttModel m = ganttModel(element);
@@ -1658,6 +1677,27 @@ GanttHit ganttHitAt(IDispatch* element, double x, double y) {
         hit.hasDate = true;
     }
     hit.inScale = hit.hasDate && ey >= d.scaleTop && ey < d.scaleBottom;
+    // Grenzen für einzelne Trennlinien: zwischen Aktivitätszeilen (über das ganze Diagramm) und an Einheiten der feinsten Skala
+    {
+        const Emu reach = emu(lineTolerance);
+        Emu rowsTop = 0, bottom = 0, best = reach + 1;
+        for (auto& band : d.rows) {
+            if (band.row == gantt::kFirstActivityRow) rowsTop = band.y;
+            if (band.row == gantt::kMilestoneRow) bottom = band.y + band.h;
+            if (band.row > gantt::kFirstActivityRow && band.row != gantt::kMilestoneRow && ex >= d.bounds.x && ex <= d.bounds.x + d.bounds.w &&
+                std::llabs(ey - band.y) < best)
+                best = std::llabs(ey - band.y), hit.lineRow = band.row;
+        }
+        Emu bestX = reach + 1;
+        for (auto& edge : d.dateEdges)
+            if (ey >= rowsTop && ey <= bottom && std::llabs(ex - edge.x) < bestX) bestX = std::llabs(ex - edge.x), hit.lineDate = edge.date;
+        hit.hasLineDate = bestX <= reach;
+        if (hit.lineRow >= 0 && hit.hasLineDate) {  // nur die nähere Grenze zählt
+            if (best <= bestX) hit.hasLineDate = false;
+            else hit.lineRow = -1;
+        }
+        if (!hit.hasLineDate) hit.lineDate = 0;
+    }
     const Emu tolerance = emu(3);
     for (auto it = d.prims.rbegin(); it != d.prims.rend(); ++it) {  // oberste Form zuerst
         if (!draggable(it->flags)) continue;
@@ -1928,6 +1968,16 @@ void ganttCommand(IDispatch* app, const std::wstring& command, const GanttHit& h
         // Zeile an eine andere Stelle ziehen (Overlay): übernimmt dort die Kategorie, Datenblatt und Excel folgen
         const int row = requireRow(hit), target = std::stoi(value);
         modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { moveGanttRowTo(item, o, row, target); });
+    } else if (key == L"rowLine") {
+        // Waagerechte Trennlinie an der Oberkante der Zeile umschalten (aus dem Rechtsklick auf die Grenze oder explizit)
+        const std::string text = narrow(value);
+        int row = 0;
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), row);
+        if (error != std::errc() || end != text.data() + text.size()) throw Error("rowLine=<Zeile> erwartet eine Zeilennummer");
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { toggleGanttRowLine(item, o, row); });
+    } else if (key == L"dateLine") {
+        // Senkrechte Trennlinie am Beginn eines Tages (ISO) umschalten
+        modifyGantt(app, e, [&](DataItem&, ChartOptions& o) { toggleGanttDateLine(o, value); });
     } else if (key == L"fill" || key == L"line" || key == L"lineWeight" || key == L"dashed" || key == L"barStyle") {
         // Aussehen der angeklickten Form: Datenblatt-Zeilen über rowStyles, frei gesetzte Elemente über ihren Stil
         if (hit.role.empty()) throw Error("Bitte mit der rechten Maustaste auf einen Balken, Meilenstein, eine Klammer oder Schattierung klicken.");

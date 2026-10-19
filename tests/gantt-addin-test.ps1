@@ -288,6 +288,7 @@ try {
     $last = @(Roles $g | Where-Object { $_ -match '^activity r\d+$' } | ForEach-Object { [int]($_ -replace '\D', '') } | Sort-Object)[-1]
     $geo = $g.Tags.Item('RETHINK_GANTT') -split ';' | ForEach-Object { [double]::Parse($_, [Globalization.CultureInfo]::InvariantCulture) }
     $lx = ($geo[0] + $geo[1]) / 2; $ly = (Center $g.GroupItems.Item("activity r$last"))[1]
+    if ($api.GanttHit($lx, $ly) -match 'trenndatum=\d') { $lx += 11 }  # nicht auf einer Skalengrenze (dort käme das Menü)
     $radial = $api.GanttRightClick($lx, $ly, '')
     Expect ($radial -match 'Balken=new=bar' -and $radial -match 'Meilenstein=new=milestone' -and $radial -notmatch '\(aus\)') 'Rundmenü an einer freien Stelle der Zeile'
     [void]$api.GanttRightClick($lx, $ly, 'new=bar')
@@ -295,6 +296,47 @@ try {
     Expect ($t.ContainsKey("bar r$last")) "Rundmenü: neuer Balken an der Stelle ($($t["bar r$last"]))"
     $bc = Center $slide.Shapes.Item($name).GroupItems.Item("bar r$last")
     Expect ($api.GanttRightClick($bc[0], $bc[1], '') -eq '') 'auf einem Balken kein Rundmenü (dort Minileiste und Menü)'
+
+    # Einzelne Trennlinien: Hover an der Grenze, Rechtsklick-Menü, Befehle, Wandern mit der Zeile
+    $g = $slide.Shapes.Item($name); $g.Select(); Start-Sleep -Milliseconds 500
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    $tok = $g.Tags.Item('RETHINK_GANTT') -split ';'
+    $lay = $g.Tags.Item('RETHINK_LAYOUT') -split ';' | ForEach-Object { [double]::Parse($_, $inv) }
+    $dx = $g.Left - $lay[4]; $dy = $g.Top - $lay[5]
+    $rowsTop = [double]::Parse($tok[4], $inv) + $dy; $rowH = [double]::Parse($tok[5], $inv); $labelsLeft = [double]::Parse($tok[7], $inv) + $dx
+    $k = 9 + 3 * [int]$tok[8]; $edgeCount = [int]$tok[$k + 1]
+    $edges = @(0..($edgeCount - 1) | ForEach-Object { [pscustomobject]@{ X = [double]::Parse($tok[$k + 2 + 2 * $_], $inv) + $dx; Date = ([datetime]'1970-01-01').AddDays([double]::Parse($tok[$k + 3 + 2 * $_], $inv)).ToString('yyyy-MM-dd') } })
+    Expect ($edgeCount -ge 4) "Grenzen der feinsten Skala am Element vermerkt ($edgeCount)"
+    $yB = $rowsTop + 2 * $rowH; $xl = $labelsLeft + 8   # Grenze zwischen Tabellenzeile 3 und 4, im Beschriftungsbereich
+    $hov = $api.GanttHover($xl, $yB)
+    Expect ($hov -match '^waagerecht zeile=4 band=') "Hover zwischen zwei Zeilen: waagerechtes Band ($hov)"
+    $hc = $api.GanttHover($xl, $rowsTop + $rowH / 2)   # Zeilenmitte der ersten Aktivitätszeile (fern von PowerPoints Anfassern)
+    Expect ($hc -notmatch 'waagerecht' -and $hc -match 'griff=zelle r2 c\d') "Hover in der Zeilenmitte: kein Band, dafür leuchtet die Zelle ($hc)"
+    Expect ($api.GanttHover($g.Left - 19 * $ptPerPx, $yB + $rowH / 2) -match 'griff=zeile activity r4') 'Hover am Zeilengriff'
+    $e = $edges[2]; $yMid = $rowsTop + $rowH / 2
+    Expect ($api.GanttHover($e.X, $yMid) -match "^senkrecht datum=$($e.Date) band=") "Hover an einer Skalengrenze: senkrechtes Band ($($e.Date))"
+    $hit = $api.GanttHit($e.X, $yMid)
+    Expect ($hit -match "trenndatum=$($e.Date)" -and $api.GanttHit($xl, $yB) -match 'trennzeile=4') "Treffer enthält die Grenze ($hit)"
+    $far = $api.GanttHover($e.X, $rowsTop - 6 * $ptPerPx)   # über den Zeilen (im Skalenband) gehört die Grenze nicht dazu
+    Expect ($far -notmatch 'senkrecht') "im Skalenband kein Band ($far)"
+    $menu = $api.GanttMenu($xl, $yB)
+    Expect ($menu -match 'Waagerechte Trennlinie hier einfügen=rowLine=4' -and $menu -notmatch 'Senkrechte Trennlinie') 'Menü an der Zeilengrenze: Waagerechte Trennlinie hier einfügen'
+    Expect ($api.GanttMenu($e.X, $yMid) -match "Senkrechte Trennlinie hier einfügen=dateLine=$($e.Date)") 'Menü an der Skalengrenze: Senkrechte Trennlinie hier einfügen'
+    Expect ($api.GanttRightClick($e.X + 8 * $ptPerPx, $yB, '') -eq '') 'an der Grenze kein Rundmenü'
+    $api.GanttCommand('rowLine=4')
+    $g = $slide.Shapes.Item($name)
+    Expect ((Roles $g) -contains 'line row r4' -and [math]::Abs($g.GroupItems.Item('line row r4').Top - $yB) -lt 1.5 -and $g.GroupItems.Item('line row r4').Line.Weight -eq 0.75) 'Befehl rowLine=4: Linie „line row r4“ genau an der Grenze'
+    Expect ($api.GanttMenu($xl, $yB) -match 'Waagerechte Trennlinie hier entfernen=rowLine=4') 'Menü bietet jetzt „entfernen“ an'
+    $api.GanttCommand('rowUp', $xl, $yB + $rowH / 2)
+    Expect (((Roles $slide.Shapes.Item($name)) -contains 'line row r3') -and -not ((Roles $slide.Shapes.Item($name)) -contains 'line row r4')) 'Zeile nach oben: die Linie geht mit ihrer Zeile'
+    $api.GanttCommand('rowLine=3')
+    Expect (-not ((Roles $slide.Shapes.Item($name)) -match '^line row')) 'Befehl noch einmal: Linie entfernt'
+    $api.GanttCommand("dateLine=$($e.Date)")
+    $g = $slide.Shapes.Item($name)
+    Expect ((Roles $g) -contains "line date $($e.Date)" -and [math]::Abs($g.GroupItems.Item("line date $($e.Date)").Left - $e.X) -lt 1.5) "Befehl dateLine: Linie „line date $($e.Date)“ an der Skalengrenze"
+    $api.GanttCommand("dateLine=$($e.Date)")
+    Expect (-not ((Roles $slide.Shapes.Item($name)) -match '^line date')) 'Datumslinie noch einmal: entfernt'
+    $slide.Shapes.Item($name).Select()
 
     # 15. Bild
     $slide.Export((Join-Path $OutDir 'slide1.png'), 'PNG', 1600, 900)

@@ -91,10 +91,15 @@ struct GanttColumn {
     int col = 0;  // Spalte in "table"
     double left = 0, width = 0;
 };
+struct GanttEdge {
+    double x = 0, date = 0;  // senkrechte Grenze der feinsten Skala: Lage und Beginn des Tages (Tage seit 1970)
+};
 struct GanttGeometry {
     bool valid = false;
     std::vector<GanttShape> shapes;
     std::vector<GanttColumn> columns;  // gezeigte Beschriftungsspalten (Zellen zum Bearbeiten)
+    std::vector<GanttEdge> edges;      // Grenzen der feinsten Skala im Zeitbereich (einzelne senkrechte Trennlinien)
+    double bottom = 0;                 // Unterkante der Meilensteinzeile
     double plotLeft = 0, plotRight = 0, scaleTop = 0, scaleBottom = 0;
     double rowsTop = 0, rowH = 0, labelsLeft = 0;  // Aktivitätszeilen (Zeile 2 ab rowsTop) und linker Rand der Beschriftungen
     int rowCount = 0;
@@ -122,8 +127,13 @@ struct GanttHit {
     std::string role;     // ziehbare Form unter dem Punkt (leer = keine)
     std::string label;    // Datumsbeschriftung unter dem Punkt ("bar r2 label", "milestone label r3" …), wenn keine Form
     bool inScale = false; // im Band der Kalenderskalen
+    // Grenze unter der Maus (höchstens `tolerance` Punkte entfernt): waagerecht zwischen zwei Aktivitätszeilen (lineRow =
+    // Zeile unter der Grenze) bzw. senkrecht an einer Einheit der feinsten Skala (lineDate = Beginn dieses Tages).
+    int lineRow = -1;
+    bool hasLineDate = false;
+    double lineDate = 0;
 };
-GanttHit ganttHitAt(IDispatch* element, double x, double y);
+GanttHit ganttHitAt(IDispatch* element, double x, double y, double tolerance = 3);
 
 // Befehle am ausgewählten Zeitplan; hit: Mausposition beim Öffnen des Menüs. Ein Befehl ist "schlüssel=wert" oder ein
 // Aktionsname, z. B. "design=modern", "barHeight=0.75", "weekends=shaded", "separators=0", "rowSeparators=1",

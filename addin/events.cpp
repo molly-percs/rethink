@@ -5,6 +5,7 @@
 #include "dispatch.h"
 #include "elements.h"
 #include "engine/chart.h"
+#include "engine/dates.h"
 #include "gantt_menu.h"
 #include "overlay.h"
 #include "radial_menu.h"
@@ -72,12 +73,18 @@ POINT g_menuAt{};
 UINT_PTR g_menuTimer = 0;
 bool g_inMenu = false;
 
+// Grenze unter der Maus (zwischen Zeilen / Skaleneinheiten): helles Band, Bildschirmpixel; Beschreibung für Tests
+RECT g_hoverLine{};
+std::wstring g_hoverText;
+
 void stopTracking() {
     g_follow = Follow::None;
     g_element.Reset();
     g_segments.clear();
     g_gantt = {};
     g_tooltip.clear();
+    g_hoverLine = {};
+    g_hoverText.clear();
     g_cachedWidth = -1;
     g_shown = {};
     hideOverlay();
@@ -129,6 +136,8 @@ Mapping mappingOf(IDispatch* app) {
 }
 
 Mapping currentMapping() { return mappingOf(g_app.Get()); }
+
+Mapping g_overlayMap;  // Abbildung beim letzten Aufbau des Overlays: Hover ohne COM-Aufrufe bei jeder Mausbewegung
 
 // PowerPoints eigene Anfasser (8 Größenpunkte + Drehpunkt) dürfen nicht von Griffen verdeckt werden.
 bool hitsGrip(const RECT& r, const RECT& e) {
@@ -230,7 +239,7 @@ void addGanttHandles(OverlayContent& c, const Mapping& m) {
         if (!hitsGrip(rowGrip.rect, c.element)) c.handles.push_back(rowGrip);
         for (auto& col : g_gantt.columns) {
             OverlayHandle cell;
-            cell.rect = {m.x(col.left), y0, m.x(col.left + col.width), y1};
+            cell.rect = cell.cell = {m.x(col.left), y0, m.x(col.left + col.width), y1};
             if (hitsGrip(cell.rect, c.element)) cell.rect.left = std::min(cell.rect.left + scaled(8), cell.rect.right);
             cell.action = OverlayAction::CellEdit, cell.style = HandleStyle::Hidden, cell.dirX = 0, cell.dirY = 0, cell.area = area;
             cell.row = row, cell.column = col.col;
@@ -257,6 +266,7 @@ void addGanttHandles(OverlayContent& c, const Mapping& m) {
 
 OverlayContent buildContent(double left, double top, double width, double height) {
     const Mapping m = currentMapping();
+    g_overlayMap = m;
     OverlayContent c;
     c.element = {m.x(left), m.y(top), m.x(left + width), m.y(top + height)};
     if (g_info.gantt) addGanttHandles(c, m);
@@ -274,17 +284,21 @@ OverlayContent buildContent(double left, double top, double width, double height
         c.tooltipAt = {cursor.x, c.element.top - scaled(4)};
     }
     c.marker = g_marker;
+    c.line = g_hoverLine;
     return c;
 }
 
 bool sameContent(const OverlayContent& a, const OverlayContent& b) {
-    if (!EqualRect(&a.element, &b.element) || !EqualRect(&a.band, &b.band) || a.handles.size() != b.handles.size() || a.tooltip != b.tooltip) return false;
+    if (!EqualRect(&a.element, &b.element) || !EqualRect(&a.band, &b.band) || !EqualRect(&a.line, &b.line) || a.handles.size() != b.handles.size() ||
+        a.tooltip != b.tooltip)
+        return false;
     for (size_t i = 0; i < a.handles.size(); ++i)
         if (!EqualRect(&a.handles[i].rect, &b.handles[i].rect)) return false;
     return true;
 }
 
 void onOverlayAction(const OverlayHandle& handle, OverlayGesture gesture, int pixels, bool shift);
+void updateLineHover(POINT p);
 
 void readTargets() {
     g_info = elementInfo(g_element.Get());
@@ -358,6 +372,9 @@ void CALLBACK onTrack(HWND, UINT, UINT_PTR, DWORD) {
         g_follow = Follow::None;                             // Loslassen verpasst: ab jetzt wieder normal nachführen
     }
     try {
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        updateLineHover(cursor);  // verschwindet, wenn die Maus das Diagramm oder PowerPoint verlassen hat
         track();
     } catch (const std::exception& e) {
         remember("Nachführen", e);
@@ -386,6 +403,8 @@ int gripOf(OverlayAction a) {
 void beginDrag(const OverlayHandle& handle) {
     g_dragging = true;
     g_drag = {};
+    g_hoverLine = {};
+    g_hoverText.clear();
     const Mapping m = currentMapping();
     if (handle.action == OverlayAction::RowMove) {
         g_drag.kind = DragKind::Row;
@@ -608,8 +627,10 @@ void onRadial(const std::wstring& command) {
     });
 }
 
-// Freie Stelle im Zeitbereich (keine Form, keine Beschriftung, nicht die Skala): Rundmenü für neue Elemente
-bool wantsRadial(const GanttHit& hit) { return hit.valid && hit.hasDate && !hit.inScale && hit.role.empty() && hit.label.empty(); }
+// Freie Stelle im Zeitbereich (keine Form, keine Beschriftung, nicht die Skala, keine Zeilen-/Skalengrenze): Rundmenü für neue Elemente
+bool wantsRadial(const GanttHit& hit) {
+    return hit.valid && hit.hasDate && !hit.inScale && hit.role.empty() && hit.label.empty() && hit.lineRow < 0 && !hit.hasLineDate;
+}
 
 void showRadial(POINT at, const GanttHit& hit) {
     const Mapping m = currentMapping();
@@ -638,7 +659,7 @@ void openMenuAt(const ComPtr<IDispatch>& element, POINT at) {
             placeOverlay(true);
         }
         const Mapping m = currentMapping();
-        hit = ganttHitAt(element.Get(), m.pointX(at.x), m.pointY(at.y));
+        hit = ganttHitAt(element.Get(), m.pointX(at.x), m.pointY(at.y), 3.0 / std::max(std::fabs(m.ax), 1e-6));  // Grenzen: ~3 Pixel
         radial = wantsRadial(hit) && g_gantt.valid;
         if (!radial) showGanttMenu(g_app.Get(), powerPointWindow(), at, hit);
     });
@@ -673,12 +694,70 @@ bool rightClick(WPARAM message, const MOUSEHOOKSTRUCT* info) {
     return false;
 }
 
+// Grenze unter der Maus: zwischen zwei Aktivitätszeilen (waagerecht über das ganze Diagramm) oder an einer Einheit der
+// feinsten Skala (senkrecht von den Zeilen bis unter die Meilensteinzeile), höchstens ~4 Pixel entfernt; die nähere gewinnt.
+// Rechnet nur mit den beim letzten Aufbau gemerkten Lagen, ohne COM.
+struct Boundary {
+    RECT band{};
+    std::wstring text;
+};
+
+Boundary boundaryAt(POINT p) {
+    Boundary b;
+    if (!g_gantt.valid) return b;
+    const Mapping& m = g_overlayMap;
+    const long reach = 4, half = scaled(5) / 2;  // ~4 Bildschirmpixel Reichweite
+    const long left = m.x(g_gantt.labelsLeft), right = m.x(g_gantt.plotRight), top = m.y(g_gantt.rowsTop), bottom = m.y(g_gantt.bottom);
+    long best = reach + 1;
+    if (p.x >= left && p.x <= right)
+        for (int i = 1; i < g_gantt.rowCount; ++i) {
+            const long y = m.y(g_gantt.rowsTop + i * g_gantt.rowH);
+            if (std::labs(p.y - y) < best) {
+                best = std::labs(p.y - y);
+                b.band = {left, y - half, right, y + half + 1};
+                b.text = std::format(L"waagerecht zeile={}", engine::gantt::kFirstActivityRow + i);
+            }
+        }
+    if (p.y >= top && p.y <= bottom)
+        for (auto& e : g_gantt.edges) {
+            const long x = m.x(e.x);
+            if (std::labs(p.x - x) < best) {
+                best = std::labs(p.x - x);
+                b.band = {x - half, top, x + half + 1, bottom};
+                b.text = std::format(L"senkrecht datum={}", engine::isoDate(e.date));
+            }
+        }
+    return b;
+}
+
+void setHoverLine(const Boundary& b) {
+    if (EqualRect(&b.band, &g_hoverLine) || (IsRectEmpty(&b.band) && IsRectEmpty(&g_hoverLine))) return;
+    g_hoverLine = b.band;
+    g_hoverText = b.text;
+    g_shown.line = b.band;
+    setOverlayLine(b.band);
+}
+
+// Maus bei p: die Grenze darunter hell hervorheben (nur im ausgewählten Zeitplan und solange nichts gezogen wird)
+void updateLineHover(POINT p) {
+    Boundary b;
+    if (g_element && g_info.gantt && g_gantt.valid && !g_dragging && !g_acting && !g_inMenu && overlayVisible() && PtInRect(&g_shown.element, p) &&
+        (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0) {
+        HWND under = WindowFromPoint(p);
+        if (under && (under == overlayWindow() || GetAncestor(under, GA_ROOT) == powerPointWindow())) b = boundaryAt(p);
+    }
+    setHoverLine(b);
+}
+
 // Maus-Hook: PowerPoint meldet Left/Top erst beim Loslassen. Bis dahin wird das Overlay um den Mausweg versetzt;
 // beim Ändern der Größe (Drücken auf einen Anfasser) verschwindet es und kommt nach dem Neu-Layout wieder.
 LRESULT CALLBACK onMouse(int code, WPARAM message, LPARAM lParam) {
     if (code >= 0 && (message == WM_RBUTTONDOWN || message == WM_RBUTTONUP) && rightClick(message, reinterpret_cast<const MOUSEHOOKSTRUCT*>(lParam)))
         return 1;
-    if (code >= 0 && message == WM_MOUSEMOVE && g_element && overlayVisible()) overlayHoverCheck();  // Maus hat das Overlay verlassen
+    if (code >= 0 && message == WM_MOUSEMOVE && g_element && overlayVisible()) {
+        overlayHoverCheck();  // Maus hat das Overlay verlassen
+        updateLineHover(reinterpret_cast<const MOUSEHOOKSTRUCT*>(lParam)->pt);
+    }
     if (code >= 0 && g_element && !g_dragging && !g_acting) {
         const auto* info = reinterpret_cast<const MOUSEHOOKSTRUCT*>(lParam);
         if (info->hwnd != overlayWindow() && info->hwnd != ganttToolbarWindow() && info->hwnd != radialMenuWindow()) {
@@ -980,6 +1059,22 @@ std::wstring simulateGanttRightClick(double x, double y, const std::wstring& com
         hideRadialMenu();
         throw Error("Schaltfläche nicht verfügbar: " + narrow(command));
     }
+    return text;
+}
+
+std::wstring simulateGanttHover(double x, double y) {
+    if (!g_app) throw Error("Das Add-in ist nicht mit PowerPoint verbunden");
+    auto element = rethinkElementOf(disp::object(disp::object(g_app.Get(), L"ActiveWindow").Get(), L"Selection").Get());
+    if (!element || !elementInfo(element.Get()).gantt) throw Error("Bitte zuerst einen rethink-Zeitplan auswählen.");
+    g_element = element;
+    placeOverlay(true);  // Lagen und Abbildung aktuell, Overlay sichtbar
+    const POINT at{g_overlayMap.x(x), g_overlayMap.y(y)};
+    const Boundary b = boundaryAt(at);
+    setHoverLine(b);
+    const OverlayHandle* handle = overlayHoverAt(at);  // wie mit der Maus: der Griff dort leuchtet
+    std::wstring text;
+    if (!b.text.empty()) text = std::format(L"{} band={},{},{},{}", b.text, b.band.left, b.band.top, b.band.right, b.band.bottom);
+    if (handle) text += (text.empty() ? L"" : L"; ") + std::format(L"griff={} {}", actionName(handle->action), handle->role.empty() ? std::format(L"r{} c{}", handle->row, handle->column) : widen(handle->role));
     return text;
 }
 

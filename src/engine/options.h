@@ -74,6 +74,11 @@ struct GanttOptions {
     bool headlines = true;
     std::optional<bool> rowSeparators;  // waagerechte Trennlinien zwischen den Zeilen; ohne Angabe: Design
     std::vector<int> shadedRows;       // Zeilen ("table"-Index) mit Hintergrund
+    // Einzeln gesetzte Trennlinien. rowLines: Zeilen ("table"-Index, ab der zweiten Aktivitätszeile), an deren Oberkante
+    // eine waagerechte Linie steht – sie gehört zur Zeile und wandert mit ihr; unter der letzten Zeile liegt die Regel der
+    // Meilensteinzeile. dateLines: ISO-Tage; senkrechte Linie am Beginn des Tages (Rand zwischen zwei Skaleneinheiten).
+    std::vector<int> rowLines;
+    std::vector<std::wstring> dateLines;
     bool todayLine = false;            // Heute-Linie (gestrichelt)
     std::wstring today;                // ihr Datum (ISO); leer = referenceDay
     std::vector<GanttItem> items;

@@ -36,5 +36,8 @@ GanttHit ganttHitAtPoint(IDispatch* app, double x, double y);
 // Für Tests: Rechtsklick an einem Folienpunkt des ausgewählten Zeitplans. Freie Stelle im Zeitbereich: öffnet das Rundmenü,
 // liefert seine Schaltflächen und löst command aus (leer = offen lassen); sonst leer (dort käme das Kontextmenü).
 std::wstring simulateGanttRightClick(double x, double y, const std::wstring& command);
+// Für Tests: Maus über einem Folienpunkt des ausgewählten Zeitplans. Liefert die hervorgehobene Grenze ("waagerecht zeile=3 band=…",
+// "senkrecht datum=2026-11-09 band=…") und den leuchtenden Griff ("griff=zelle r2 c0"), durch "; " getrennt; leer = nichts.
+std::wstring simulateGanttHover(double x, double y);
 
 }  // namespace rethink::addin

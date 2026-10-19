@@ -312,6 +312,20 @@ void parseGantt(const JsonObject& o, engine::GanttOptions& g) {
     g.headlines = optionalBool(o, L"headlines", g.headlines);
     if (present(o, L"rowSeparators")) g.rowSeparators = optionalBool(o, L"rowSeparators", false);
     g.shadedRows = intList(o, L"shadedRows");
+    g.rowLines = intList(o, L"rowLines");
+    for (int r : g.rowLines)
+        if (r < 3) fail("chart", "\"rowLines\" erwartet Zeilennummern ab 3 (Oberkante der zweiten Aktivitätszeile oder tiefer)");
+    if (present(o, L"dateLines")) {
+        auto v = o.GetNamedValue(L"dateLines");
+        if (v.ValueType() != JsonValueType::Array) fail("chart", "\"dateLines\" muss ein Array von Daten wie [\"2026-11-09\"] sein");
+        for (auto const& day : v.GetArray()) {
+            if (day.ValueType() != JsonValueType::String) fail("chart", "\"dateLines\" muss ein Array von Daten wie [\"2026-11-09\"] sein");
+            const std::wstring text(day.GetString());
+            if (text.empty()) fail("chart", "\"dateLines\" darf keine leeren Einträge enthalten");
+            checkDate(text, "chart", "dateLines");
+            g.dateLines.push_back(text);
+        }
+    }
     if (o.HasKey(L"today")) {
         auto v = o.GetNamedValue(L"today");
         if (v.ValueType() == JsonValueType::Boolean) {
@@ -478,6 +492,11 @@ std::wstring ganttEditsJson(const engine::GanttOptions& g) {
     JsonArray shaded;
     for (int r : g.shadedRows) shaded.Append(JsonValue::CreateNumberValue(r));
     o.SetNamedValue(L"shadedRows", shaded);
+    JsonArray rowLines, dateLines;
+    for (int r : g.rowLines) rowLines.Append(JsonValue::CreateNumberValue(r));
+    for (auto& day : g.dateLines) dateLines.Append(JsonValue::CreateStringValue(day));
+    o.SetNamedValue(L"rowLines", rowLines);
+    o.SetNamedValue(L"dateLines", dateLines);
     JsonArray items;
     for (auto& it : g.items) {
         JsonObject e;
