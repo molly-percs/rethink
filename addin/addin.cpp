@@ -298,14 +298,32 @@ std::wstring hitText(const GanttHit& h) {
                        h.label.empty() ? L"-" : widen(h.label), h.lineRow, h.hasLineDate ? engine::isoDate(h.lineDate) : L"-");
 }
 
+// Hauptfenster von PowerPoint als Besitzer für Meldungen, damit sie nicht hinter PowerPoint verschwinden.
+HWND messageOwner() {
+    HWND found = nullptr;
+    EnumThreadWindows(
+        GetCurrentThreadId(),
+        [](HWND hwnd, LPARAM param) -> BOOL {
+            wchar_t name[64] = {};
+            GetClassNameW(hwnd, name, 64);
+            if (wcscmp(name, L"PPTFrameClass") == 0 && IsWindowVisible(hwnd)) {
+                *reinterpret_cast<HWND*>(param) = hwnd;
+                return FALSE;
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&found));
+    return found ? found : GetActiveWindow();
+}
+
 template <class F>
 void ribbonGuarded(F&& body) {
     try {
         body();
     } catch (const winrt::hresult_error& e) {
-        MessageBoxW(nullptr, e.message().c_str(), L"rethink", MB_ICONINFORMATION);
+        MessageBoxW(messageOwner(), e.message().c_str(), L"rethink", MB_ICONINFORMATION);
     } catch (const std::exception& e) {
-        MessageBoxW(nullptr, widen(e.what()).c_str(), L"rethink", MB_ICONINFORMATION);
+        MessageBoxW(messageOwner(), widen(e.what()).c_str(), L"rethink", MB_ICONINFORMATION);
     } catch (...) {
     }
 }
@@ -483,7 +501,9 @@ public:
                 const std::wstring mso = tagPart(controlProp(params, 0, L"Tag"), L"mso:");
                 if (mso.empty()) return;
                 if (!app_) throw Error("Das Add-in ist nicht mit PowerPoint verbunden");
-                disp::call(disp::object(app_.Get(), L"CommandBars").Get(), L"ExecuteMso", mso);
+                const auto bars = disp::object(app_.Get(), L"CommandBars");
+                if (disp::call(bars.Get(), L"GetEnabledMso", mso).toLong() == 0) return;  // gerade nicht möglich (z. B. keine Präsentation): still ignorieren
+                disp::call(bars.Get(), L"ExecuteMso", mso);
             });
             return S_OK;
         case kOnCommand:
@@ -504,14 +524,14 @@ public:
             ribbonGuarded([&] {
                 if (!app_) throw Error("Das Add-in ist nicht mit PowerPoint verbunden");
                 const int count = applyDatasheets(app_.Get());
-                MessageBoxW(nullptr, count > 0 ? std::format(L"{} Element(e) aus dem Datenblatt neu gezeichnet.", count).c_str() : L"Keine geänderten Datenblätter.",
+                MessageBoxW(messageOwner(), count > 0 ? std::format(L"{} Element(e) aus dem Datenblatt neu gezeichnet.", count).c_str() : L"Keine geänderten Datenblätter.",
                             L"rethink", MB_ICONINFORMATION);
             });
             return S_OK;
         case kOnAbout: {
             std::wstring text = L"rethink " RETHINK_VERSION L"\nDiagramme und Zeitpläne für PowerPoint";
             if (controlId(params, 0) == L"rethinkHelp") text += L"\n\nAnleitung: README.md im rethink-Projektordner (github.com/molly-percs/rethink).";
-            MessageBoxW(nullptr, text.c_str(), L"rethink", MB_ICONINFORMATION);
+            MessageBoxW(messageOwner(), text.c_str(), L"rethink", MB_ICONINFORMATION);
             return S_OK;
         }
         case kRibbonStatus: setString(result, ribbon_ ? L"geladen" : L"nicht geladen"); return S_OK;

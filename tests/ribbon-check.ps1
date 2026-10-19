@@ -19,6 +19,12 @@ $pp.Visible = -1
 $pres = $pp.Presentations.Add(-1)
 try {
     [void]$pres.Slides.Add(1, 12)
+    # Jede "mso:"-ID in den Tags des Ribbon-XML muss für ExecuteMso gültig sein (GetLabelMso wirft sonst).
+    $xml = Get-Content -Raw -Encoding UTF8 (Join-Path $PSScriptRoot '..\addin\ribbon.xml')
+    $badMso = @()
+    foreach ($id in ([regex]::Matches($xml, '(?<=\btag="[^"]*)mso:([A-Za-z0-9_]+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)) {
+        try { "mso:$id -> " + $pp.CommandBars.GetLabelMso($id) } catch { $badMso += $id }
+    }
     $api = $pp.COMAddIns.Item('rethink.addin').Object
     $status = $api.RibbonStatus()
     "Ribbon: $status"
@@ -36,6 +42,7 @@ try {
     $g.Dispose(); $bmp.Dispose()
     $Out
     if ($status -ne 'geladen') { throw 'PowerPoint hat das Ribbon-XML nicht angenommen' }
+    if ($badMso) { throw "Ungültige idMso in den Tags von ribbon.xml (GetLabelMso schlägt fehl): $($badMso -join ', ')" }
 } finally {
     $pres.Saved = -1; $pres.Close()
     if (-not $pptWasRunning) { $pp.Quit() }
