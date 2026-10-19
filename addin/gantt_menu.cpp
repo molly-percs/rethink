@@ -177,7 +177,7 @@ std::vector<Entry> buildMenu(const GanttState& s, const GanttHit& hit) {
     // Linien und Wochenenden
     m.push_back(submenu(L"Trennlinien", {toggle(L"Senkrecht (an den Skaleneinheiten)", L"separators", s.separators),
                                          toggle(L"Waagerecht (zwischen den Zeilen)", L"rowSeparators", s.rowSeparators), separator(),
-                                         toggle(L"Meilensteinlinien", L"milestoneLines", g.milestoneLines), toggle(L"Heute-Linie", L"today", g.todayLine)}));
+                                         toggle(L"Meilensteinlinien", L"milestoneLines", s.milestoneLines), toggle(L"Heute-Linie", L"today", g.todayLine)}));
     m.push_back(submenu(L"Wochenenden", {item(L"Normal", L"weekends=plain", g.weekends == WeekendMode::Plain, true),
                                          item(L"Leicht grau", L"weekends=shaded", g.weekends == WeekendMode::Shaded, true),
                                          item(L"Ausgeblendet", L"weekends=hidden", g.weekends == WeekendMode::Hidden, true)}));

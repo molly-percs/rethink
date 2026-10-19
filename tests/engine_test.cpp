@@ -313,6 +313,7 @@ ChartOptions ganttOptions() {
     o.type = ChartType::Gantt;
     o.gantt.start = L"2026-11-01";
     o.gantt.end = L"2027-01-31";
+    o.gantt.dateFormat = L"dd.MM.";  // kurze Beschriftungen in den Prüfungen
     return o;
 }
 
@@ -327,7 +328,7 @@ void testGanttLayout() {
     const auto scales = ganttScales(d.axis.t0, d.axis.t1, d.axis.w, o);
     check(scales.size() == 2 && scales[0] == TimeUnit::Month && scales[1] == TimeUnit::Week, "Gantt: drei Monate auf 25 cm → Monats- und Wochenskala");
     const Prim* month = find(d, "scale month 1");
-    check(month && month->text == L"November", "Gantt: Monatsbeschriftung „November“");
+    check(month && month->text == L"Nov" && month->bold && month->align == Align::Left, "Gantt: Monat kurz, fett, linksbündig wie im Original („Nov“)");
     // Wochen sind hier zu schmal für "dd.MM.": Kalenderwochen ab Montag 02.11. (KW 45)
     check(find(d, "scale week 2") && find(d, "scale week 2")->text == L"45", "Gantt: Wochenskala zeigt KW 45 für Montag 02.11.");
     const Prim* bar = find(d, "bar r2");
@@ -340,9 +341,9 @@ void testGanttLayout() {
     check(!find(d, "headline remark"), "Gantt: leere Spalte „Bemerkung“ ist ausgeblendet");
     check(find(d, "responsible r4") && find(d, "responsible r4")->text == L"Team B", "Gantt: Verantwortlich-Eintrag");
     const Prim* ms = find(d, "milestone r3");
-    check(ms && ms->kind == Prim::Kind::Shape && ms->shape == "diamond" &&
+    check(ms && ms->kind == Prim::Kind::Shape && ms->shape == "triangle" && ms->rotation == 0 &&
               std::llabs(ms->x + ms->w / 2 - std::llround(d.axis.xOf(*parseIsoDate(L"2026-12-11")))) <= 1,
-          "Gantt: Meilenstein am Tagesanfang (ohne Tagesskala)");
+          "Gantt: Meilenstein ▲ am Tagesanfang (ohne Tagesskala)");
     check(find(d, "milestone label r3") && find(d, "milestone label r3")->text == L"11.12.", "Gantt: Meilenstein mit Datum");
     const Prim* key = find(d, "milestone r1");
     const Prim* lastBar = find(d, "bar r4");
@@ -350,11 +351,42 @@ void testGanttLayout() {
     check(find(d, "activity r1") && find(d, "activity r1")->text == L"Meilensteine", "Gantt: Beschriftung der Meilensteinzeile");
     int separators = 0, dashed = 0;
     for (auto& p : d.prims)
-        if (p.role.starts_with("separator")) ++separators, dashed += p.dashed;
-    check(separators > 0 && dashed > 0 && dashed < separators, "Gantt: Trennlinien – Monate durchgezogen, Wochen gestrichelt");
-    bool weekends = false;
-    for (auto& p : d.prims) weekends = weekends || p.role.starts_with("weekend");
+        if (p.role.starts_with("separator")) ++separators, dashed += p.dotted;
+    check(separators > 0 && dashed > 0 && dashed < separators, "Gantt: Trennlinien – Monate durchgezogen, Wochen gepunktet");
+    bool weekends = false, plain = true;
+    for (auto& p : d.prims) plain = plain && !p.role.starts_with("weekend");
+    check(plain, "Gantt: Wochenenden wie im Original zunächst ohne Grau");
+    ChartOptions grey = o;
+    grey.gantt.weekends = WeekendMode::Shaded;
+    for (auto& p : layoutChart(item, grey, box).prims) weekends = weekends || p.role.starts_with("weekend");
     check(weekends, "Gantt: Wochenenden auch in der Wochenansicht leicht grau");
+    // Aussehen wie im Original: Rahmen der Zeitachse, keine Teilstriche, ▲ der Meilensteinzeile mit Datum darunter und Linie
+    check(find(d, "frame left") && find(d, "frame right") && !find(d, "scale week tick 2"), "Standard: Rahmen links/rechts, Skalen ohne Teilstriche");
+    const Prim* keyMark = find(d, "milestone r1");
+    const Prim* keyDate = find(d, "milestone label r1");
+    const Prim* keyLine = find(d, "milestone line r1");
+    check(keyMark && keyDate && keyDate->y >= keyMark->y + keyMark->h && std::llabs(keyDate->x + keyDate->w / 2 - (keyMark->x + keyMark->w / 2)) <= 1,
+          "Standard: Datum mittig unter dem ▲ der Meilensteinzeile");
+    check(keyLine && keyLine->dashed && keyLine->y == find(d, "frame left")->y, "Standard: gestrichelte Meilensteinlinie bis zur Oberkante");
+    check(find(d, "bar r2") && find(d, "bar r2")->fill.scheme == L"tx1", "Standard: Balken in Textfarbe (schwarz) wie im Original");
+    {
+        ChartOptions lang = ganttOptions();
+        lang.gantt.dateFormat.clear();
+        check(find(layoutChart(item, lang, box), "milestone label r1")->text == L"15.01.2027", "Datumsformat nach Sprache: dd.MM.yyyy");
+        lang.language = L"en";
+        check(find(layoutChart(item, lang, box), "milestone label r1")->text == L"1/15/2027", "Datumsformat nach Sprache: M/d/yyyy");
+    }
+    {
+        // Aussehen je Element: gestrichelter Balken (wie „Dashed Bar“), Füllfarbe eines Meilensteins
+        ChartOptions styled = ganttOptions();
+        styled.gantt.rowStyles = {{2, {L"bg1", L"tx1", 1.5, true}, {}}, {3, {}, {L"accent2", L"", 0, false}}};
+        const Drawing s = layoutChart(item, styled, box);
+        const Prim* dashedBar = find(s, "bar r2");
+        check(dashedBar && dashedBar->fill.scheme == L"bg1" && dashedBar->stroke.scheme == L"tx1" && dashedBar->dashed && dashedBar->strokePt == 1.5,
+              "Stil je Zeile: gestrichelter Balken");
+        check(find(s, "milestone r3") && find(s, "milestone r3")->fill.scheme == L"accent2", "Stil je Zeile: Farbe des Meilensteins");
+        check(find(s, "bar r3") && find(s, "bar r3")->stroke.kind == Color::Kind::None, "ohne Stil: kein Umriss");
+    }
     check(d.prims.front().role == "background" && d.prims.front().transparency == 1, "Gantt: unsichtbare Fläche hinter allem (Klick trifft das Diagramm)");
     {
         ChartOptions years = ganttOptions();
@@ -367,6 +399,7 @@ void testGanttLayout() {
     // Zwei Wochen: Tagesskala, Wochenenden schattiert, Meilensteine in der Tagesmitte
     o.gantt.start = L"2026-12-01";
     o.gantt.end = L"2026-12-14";
+    o.gantt.weekends = WeekendMode::Shaded;
     const Drawing days = layoutChart(item, o, box);
     check(days.axis.dayScale && find(days, "scale day 1"), "Gantt: zwei Wochen → Tagesskala");
     bool weekend = false;
@@ -449,7 +482,7 @@ void testGanttCategories() {
     item.table[3][gantt::kPredecessorCol] = str(L"Analyse");
     item.table[4][gantt::kPredecessorCol] = str(L"konzept");  // Groß-/Kleinschreibung egal
     item.table[3][gantt::kShapeCol] = str(L"Chevron");
-    item.table[3][gantt::kMarkerCol] = str(L"Dreieck");
+    item.table[3][gantt::kMarkerCol] = str(L"Dreieck unten");
     check(ganttCategories(item) == std::vector<std::wstring>{L"Planung", L"Bau"}, "Kategorien in Reihenfolge des Auftretens");
     check(canonicalBarShape(L"Fünfeck") == L"pentagon" && canonicalMarker(L"Stern") == L"star" && canonicalBarShape(L"Kreis").empty(),
           "Formnamen deutsch/englisch");
@@ -468,7 +501,7 @@ void testGanttCategories() {
     const Prim* chevron = find(d, "bar r3");
     check(chevron && chevron->kind == Prim::Kind::Shape && chevron->shape == "chevron", "Form aus Spalte 8: Chevron");
     const Prim* triangle = find(d, "milestone r3");
-    check(triangle && triangle->shape == "triangle" && triangle->rotation == 180, "Marker aus Spalte 9: Dreieck mit Spitze nach unten");
+    check(triangle && triangle->shape == "triangle" && triangle->rotation == 180, "Marker aus Spalte 9: Dreieck unten (▼)");
     check(find(d, "link r3 1 arrow") && find(d, "link r4 1 arrow"), "Vorgänger als Pfeile verbunden");
     o.gantt.links = false;
     check(!find(layoutChart(item, o, box), "link r3 1 arrow"), "Verbindungen ausschaltbar");
@@ -513,6 +546,19 @@ void testGanttCategories() {
     check(sorted.table[2][0].text == L"Umsetzung" && sorted.table[3][0].text == L"Analyse" && sorted.table[4][0].text == L"Konzept",
           "Sortieren: Bau zuerst, Planung stabil dahinter");
     check(so.gantt.items[0].row == 2 && so.gantt.shadedRows[0] == 3, "Sortieren: Elemente und Schattierungen folgen ihrer Zeile");
+    // Zeile im Diagramm ziehen: innerhalb der Kategorie, dann in eine andere (übernimmt deren Kategorie)
+    {
+        DataItem drag = item;  // Analyse, Konzept (Planung), Umsetzung (Bau)
+        ChartOptions dragOptions = ganttOptions();
+        dragOptions.gantt.rowStyles = {{2, {L"accent3", L"", 0, false}, {}}};
+        check(moveGanttRowTo(drag, dragOptions, 2, 3) && drag.table[2][0].text == L"Konzept" && drag.table[3][0].text == L"Analyse" &&
+                  drag.table[3][gantt::kCategoryCol].text == L"Planung" && dragOptions.gantt.rowStyles[0].row == 3,
+              "Zeile innerhalb der Kategorie nach unten gezogen, Stil folgt");
+        check(moveGanttRowTo(drag, dragOptions, 3, 4) && drag.table[4][0].text == L"Analyse" && drag.table[4][gantt::kCategoryCol].text == L"Bau" &&
+                  drag.table[3][0].text == L"Umsetzung",
+              "Zeile in die Kategorie Bau gezogen: übernimmt die Kategorie im Datenblatt");
+        check(!moveGanttRowTo(drag, dragOptions, 4, 4) && !moveGanttRowTo(drag, dragOptions, 1, 3), "Ablage an derselben Stelle bzw. Meilensteinzeile: nichts");
+    }
     check(toggleGanttLink(sorted, 4, L"Umsetzung") && sorted.table[4][gantt::kPredecessorCol].text == L"Analyse; Umsetzung", "Verbindung hinzufügen");
     check(!toggleGanttLink(sorted, 4, L"Analyse") && sorted.table[4][gantt::kPredecessorCol].text == L"Umsetzung", "Verbindung entfernen");
 }

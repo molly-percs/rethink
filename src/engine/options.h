@@ -24,6 +24,15 @@ enum class GanttDesign { Standard, Modern, Contrast, Minimal };
 // Kategorien links: Klammer neben fettem Text, farbiger Block mit weißem Text, nur fetter Text
 enum class CategoryStyle { Bracket, Block, Text };
 
+// Aussehen eines Balkens oder Meilensteins (Mini-Toolbar beim Rechtsklick). Farben als Designfarbe ("tx1", "bg1",
+// "tx2", "bg2", "accent1" … "accent6"), "#RRGGBB" oder "none"; leer = Vorgabe des Designs.
+struct ShapeStyle {
+    std::wstring fill, line;
+    double lineWeight = 0;  // pt; 0 = Vorgabe (1,5 pt, wenn ein Umriss gesetzt ist)
+    bool dashed = false;    // gestrichelter Umriss („Dashed Bar“)
+    bool empty() const { return fill.empty() && line.empty() && lineWeight == 0 && !dashed; }
+};
+
 // Frei gesetztes Zeitelement (nicht an Datenblattdaten gebunden), Teil von "chart.items".
 struct GanttItem {
     enum class Kind { Bar, Pentagon, Chevron, Milestone, Bracket, Shade } kind = Kind::Bar;
@@ -32,12 +41,20 @@ struct GanttItem {
     std::wstring end;        // ISO-Datum, ausschließlich (wie im Datenblatt: Ende 00:00 Uhr)
     std::wstring text;       // Text im Fünfeck/Chevron bzw. an der Klammer; leer = Datum
     std::optional<std::uint32_t> fill;
+    ShapeStyle style;
+};
+
+// Aussehen je Datenblattzeile (Balken und Meilenstein der Zeile); wandert mit, wenn Zeilen eingefügt, gelöscht,
+// verschoben oder sortiert werden.
+struct RowStyle {
+    int row = 0;
+    ShapeStyle bar, milestone;
 };
 
 struct GanttOptions {
     std::wstring start, end;           // sichtbarer Bereich (ISO, beide Tage eingeschlossen); leer = an die Daten angepasst
     std::vector<TimeUnit> scales;      // gezeigte Kalenderskalen, grob → fein; leer = automatisch
-    WeekendMode weekends = WeekendMode::Shaded;
+    WeekendMode weekends = WeekendMode::Plain;  // wie im Original; „leicht grau“ über das Kontextmenü
     int weekendFirst = 6, weekendLast = 7;  // ISO-Wochentage (1 = Montag … 7 = Sonntag)
     int weekStart = 1;                 // erster Wochentag
     GanttDesign design = GanttDesign::Standard;
@@ -50,8 +67,8 @@ struct GanttOptions {
     bool links = true;                          // Vorgänger (Spalte 7) als Pfeile verbinden
     BarLabel barLabels = BarLabel::None;
     bool milestoneLabels = true;
-    bool milestoneLines = false;       // Linie über alle Zeilen an den Meilensteinen der Meilensteinzeile
-    std::wstring dateFormat;           // Format der Datumsbeschriftungen an Elementen; leer = "dd.MM."
+    std::optional<bool> milestoneLines;  // gestrichelte Linie über alle Zeilen an den Meilensteinen der Meilensteinzeile; ohne Angabe: Design
+    std::wstring dateFormat;           // Format der Datumsbeschriftungen an Elementen; leer = nach Sprache (dd.MM.yyyy bzw. M/d/yyyy)
     std::wstring dayFormat, weekFormat, monthFormat, quarterFormat, yearFormat;  // Skalenformate; leer = Vorgabe
     std::optional<bool> responsible, remark;  // Beschriftungsspalten; ohne Angabe: sichtbar, wenn es Einträge gibt
     bool headlines = true;
@@ -60,6 +77,7 @@ struct GanttOptions {
     bool todayLine = false;            // Heute-Linie (gestrichelt)
     std::wstring today;                // ihr Datum (ISO); leer = referenceDay
     std::vector<GanttItem> items;
+    std::vector<RowStyle> rowStyles;   // Aussehen je Datenblattzeile (nur Zeilen mit Angaben)
     double referenceDay = 0;           // heutiges Datum (Tage seit 1970), vom Aufrufer gesetzt: Vorgabebereich ohne Daten
 };
 

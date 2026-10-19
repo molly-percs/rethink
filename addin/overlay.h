@@ -20,6 +20,7 @@ enum class OverlayAction {
     GanttMove,      // … ganzes Element verschieben (Klick wählt die Form aus)
     RangeStart,     // Anfang des sichtbaren Bereichs (Pfeil am linken Skalenende)
     RangeEnd,       // Ende des sichtbaren Bereichs
+    RowMove,        // Zeitplan: Zeile an ihrer Beschriftung nach oben/unten ziehen (auch in eine andere Kategorie)
 };
 
 enum class HandleStyle {
@@ -45,6 +46,7 @@ struct OverlayContent {
     std::vector<OverlayHandle> handles;
     std::wstring tooltip;  // Kurzinfo beim Ziehen (z. B. Datum)
     POINT tooltipAt{};     // Bildschirmpunkt (Mitte unten der Kurzinfo)
+    RECT marker{};         // blaue Einfügelinie beim Ziehen einer Zeile (leer = keine)
 };
 
 // Geste an einem Griff. Ein Griff wird geklickt (Loslassen ohne Bewegung) oder gezogen: Drag kommt bei jeder

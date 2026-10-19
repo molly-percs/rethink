@@ -1,0 +1,27 @@
+[
+	{
+		"template": "out/waterfall-template.pptx",
+		"data": [
+			{ "name": "SlideTitle", "table": [[{ "string": "Vergleich mit dem Original (Standard-Design)" }]] },
+			{
+				"name": "Bridge",
+				"chart": {
+					"type": "gantt", "start": "2026-10-01", "end": "2026-12-31",
+					"items": [
+						{ "kind": "bar", "row": 2, "start": "2026-10-21", "end": "2026-10-31", "style": { "fill": "bg1", "line": "tx1", "weight": 1.5, "dashed": true } }
+					]
+				},
+				"table": [
+					[{ "string": "Activity" }],
+					[null, null, null, { "date": "2026-10-15" }],
+					[{ "string": "Label" }, { "date": "2026-10-08" }, { "date": "2026-10-21" }],
+					[{ "string": "Label" }],
+					[{ "string": "Label" }],
+					[{ "string": "Label" }],
+					[{ "string": "Label" }],
+					[{ "string": "Label" }]
+				]
+			}
+		]
+	}
+]

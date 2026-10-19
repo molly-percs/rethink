@@ -63,28 +63,34 @@ std::wstring textBodyXml(const Prim& p) {
            paragraphsXml(p) + L"</p:txBody>";
 }
 
+// Linie bzw. Umriss: Farbe, Stärke, gestrichelt/gepunktet; ohne Farbe kein Umriss
+std::wstring lineXml(const Prim& p) {
+    if (p.stroke.kind == Color::Kind::None) return L"<a:ln><a:noFill/></a:ln>";
+    const wchar_t* dash = p.dashed ? L"<a:prstDash val=\"dash\"/>" : p.dotted ? L"<a:prstDash val=\"sysDot\"/>" : L"";
+    return std::format(L"<a:ln w=\"{}\">{}{}</a:ln>", static_cast<Emu>(p.strokePt * kEmuPerPt), colorXml(p.stroke), dash);
+}
+
 std::wstring primXml(const Prim& p, int id) {
     const std::wstring name = xmlEscape(std::wstring(p.role.begin(), p.role.end()));
     switch (p.kind) {
         case Prim::Kind::Rect:
             return std::format(
                 L"<p:sp><p:nvSpPr><p:cNvPr id=\"{}\" name=\"{}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>{}"
-                L"<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>{}<a:ln><a:noFill/></a:ln></p:spPr></p:sp>",
-                id, name, xfrmXml(p.x, p.y, p.w, p.h), colorXml(p.fill, p.transparency));
+                L"<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>{}{}</p:spPr></p:sp>",
+                id, name, xfrmXml(p.x, p.y, p.w, p.h), colorXml(p.fill, p.transparency), lineXml(p));
         case Prim::Kind::Shape:
             return std::format(
                 L"<p:sp><p:nvSpPr><p:cNvPr id=\"{}\" name=\"{}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>{}"
-                L"<a:prstGeom prst=\"{}\"><a:avLst/></a:prstGeom>{}<a:ln><a:noFill/></a:ln></p:spPr>{}</p:sp>",
-                id, name, xfrmXml(p.x, p.y, p.w, p.h, false, false, p.rotation), widen(p.shape), colorXml(p.fill, p.transparency),
+                L"<a:prstGeom prst=\"{}\"><a:avLst/></a:prstGeom>{}{}</p:spPr>{}</p:sp>",
+                id, name, xfrmXml(p.x, p.y, p.w, p.h, false, false, p.rotation), widen(p.shape), colorXml(p.fill, p.transparency), lineXml(p),
                 p.text.empty() ? L"" : textBodyXml(p));
         case Prim::Kind::Line: {
             const bool flipH = p.w < 0, flipV = p.h < 0;
             const Emu x = flipH ? p.x + p.w : p.x, y = flipV ? p.y + p.h : p.y;
             return std::format(
                 L"<p:cxnSp><p:nvCxnSpPr><p:cNvPr id=\"{}\" name=\"{}\"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr>{}"
-                L"<a:prstGeom prst=\"line\"><a:avLst/></a:prstGeom><a:ln w=\"{}\">{}{}</a:ln></p:spPr></p:cxnSp>",
-                id, name, xfrmXml(x, y, std::abs(p.w), std::abs(p.h), flipH, flipV), static_cast<Emu>(p.strokePt * kEmuPerPt),
-                colorXml(p.stroke), p.dashed ? L"<a:prstDash val=\"dash\"/>" : L"");
+                L"<a:prstGeom prst=\"line\"><a:avLst/></a:prstGeom>{}</p:spPr></p:cxnSp>",
+                id, name, xfrmXml(x, y, std::abs(p.w), std::abs(p.h), flipH, flipV), lineXml(p));
         }
         case Prim::Kind::Text:
             return std::format(

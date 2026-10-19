@@ -43,6 +43,8 @@ void shiftRows(ChartOptions& options, int from, int delta) {
         if (it.row >= from) it.row += delta;
     for (auto& r : options.gantt.shadedRows)
         if (r >= from) r += delta;
+    for (auto& s : options.gantt.rowStyles)
+        if (s.row >= from) s.row += delta;
 }
 
 // "bar r12" mit Präfix "bar r" → 12; genau Präfix + Zahl.
@@ -180,10 +182,17 @@ void duplicateGanttRow(DataItem& item, ChartOptions& options, int row, bool abov
     std::vector<GanttItem> added;
     for (auto& it : options.gantt.items)
         if (it.row == row && it.kind != GanttItem::Kind::Shade) added.push_back(it);
+    std::optional<RowStyle> style;
+    for (auto& s : options.gantt.rowStyles)
+        if (s.row == row) style = s;
     shiftRows(options, at, 1);
     for (auto& it : added) {
         it.row = at;
         options.gantt.items.push_back(it);
+    }
+    if (style) {
+        style->row = at;
+        options.gantt.rowStyles.push_back(*style);
     }
 }
 
@@ -195,6 +204,8 @@ void deleteGanttRow(DataItem& item, ChartOptions& options, int row) {
                 items.end());
     auto& shaded = options.gantt.shadedRows;
     shaded.erase(std::remove(shaded.begin(), shaded.end(), row), shaded.end());
+    auto& styles = options.gantt.rowStyles;
+    styles.erase(std::remove_if(styles.begin(), styles.end(), [&](const RowStyle& s) { return s.row == row; }), styles.end());
     shiftRows(options, row + 1, -1);
 }
 
@@ -212,6 +223,40 @@ bool moveGanttRow(DataItem& item, ChartOptions& options, int row, int delta) {
         if (r == row) r = target;
         else if (r == target) r = row;
     }
+    for (auto& s : options.gantt.rowStyles) {
+        if (s.row == row) s.row = target;
+        else if (s.row == target) s.row = row;
+    }
+    return true;
+}
+
+bool moveGanttRowTo(DataItem& item, ChartOptions& options, int row, int target) {
+    const int count = static_cast<int>(item.table.size());
+    if (row < kFirstActivityRow || row >= count || target < kFirstActivityRow || target >= count) return false;
+    const bool categories = !ganttCategories(item).empty();
+    const Cell* targetCategory = cellIf(item, target, kCategoryCol);
+    const std::wstring category = targetCategory && targetCategory->kind == CellKind::String ? targetCategory->text : L"";
+    const Cell* ownCategory = cellIf(item, row, kCategoryCol);
+    const bool sameCategory = (ownCategory && ownCategory->kind == CellKind::String ? ownCategory->text : L"") == category;
+    if (row == target && (!categories || sameCategory)) return false;
+    // neue Lage jeder Zeile: die gezogene an `target`, die dazwischen rücken um eins
+    std::vector<int> newIndex(count);
+    for (int r = 0; r < count; ++r) {
+        if (r == row) newIndex[r] = target;
+        else if (row < target && r > row && r <= target) newIndex[r] = r - 1;
+        else if (row > target && r >= target && r < row) newIndex[r] = r + 1;
+        else newIndex[r] = r;
+    }
+    std::vector<Row> moved(count);
+    for (int r = 0; r < count; ++r) moved[newIndex[r]] = std::move(item.table[r]);
+    item.table = std::move(moved);
+    auto remap = [&](int& r) {
+        if (r >= 0 && r < count) r = newIndex[r];
+    };
+    for (auto& it : options.gantt.items) remap(it.row);
+    for (auto& r : options.gantt.shadedRows) remap(r);
+    for (auto& s : options.gantt.rowStyles) remap(s.row);
+    if (categories) setGanttText(item, target, kCategoryCol, category);  // in die Kategorie der Ablagestelle
     return true;
 }
 
@@ -316,6 +361,37 @@ void sortGanttByCategory(DataItem& item, ChartOptions& options, const std::vecto
         if (it.row >= first && it.row < static_cast<int>(newIndex.size())) it.row = newIndex[it.row];
     for (auto& r : options.gantt.shadedRows)
         if (r >= first && r < static_cast<int>(newIndex.size())) r = newIndex[r];
+    for (auto& s : options.gantt.rowStyles)
+        if (s.row >= first && s.row < static_cast<int>(newIndex.size())) s.row = newIndex[s.row];
+}
+
+ShapeStyle& ganttStyle(ChartOptions& options, const GanttTarget& target) {
+    if (target.item >= 0) return options.gantt.items.at(target.item).style;
+    if (target.row < kFirstActivityRow && target.row != kMilestoneRow) throw std::invalid_argument("Dieses Element hat kein eigenes Aussehen");
+    auto& styles = options.gantt.rowStyles;
+    auto it = std::find_if(styles.begin(), styles.end(), [&](const RowStyle& s) { return s.row == target.row; });
+    if (it == styles.end()) {
+        styles.push_back({target.row, {}, {}});
+        it = styles.end() - 1;
+    }
+    return target.kind == GanttTarget::Kind::Milestone ? it->milestone : it->bar;
+}
+
+void shiftGanttRows(ChartOptions& options, int from, int delta) {
+    if (delta < 0) {  // gelöschte Zeilen verlieren ihre Elemente, Schattierungen und ihr Aussehen
+        const int to = from - delta;
+        auto gone = [&](int r) { return r >= from && r < to; };
+        auto& items = options.gantt.items;
+        items.erase(std::remove_if(items.begin(), items.end(), [&](const GanttItem& it) { return gone(it.row) && it.kind != GanttItem::Kind::Shade; }),
+                    items.end());
+        auto& shaded = options.gantt.shadedRows;
+        shaded.erase(std::remove_if(shaded.begin(), shaded.end(), gone), shaded.end());
+        auto& styles = options.gantt.rowStyles;
+        styles.erase(std::remove_if(styles.begin(), styles.end(), [&](const RowStyle& s) { return gone(s.row); }), styles.end());
+        shiftRows(options, to, delta);
+        return;
+    }
+    shiftRows(options, from, delta);
 }
 
 void deleteGanttTarget(DataItem& item, ChartOptions& options, const GanttTarget& target) {

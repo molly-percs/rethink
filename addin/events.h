@@ -26,7 +26,7 @@ std::wstring overlayInfo();
 std::wstring simulateSegmentDrag(int row, int column, const std::vector<int>& pixels);
 
 // Für Tests: zieht am ausgewählten Zeitplan (role wie "bar r2", "item 0" oder "range"; grip 0 = Anfang, 1 = Ende,
-// 2 = verschieben) über dieselben Schritte wie die Maus (Pixel nach rechts) und lässt los bzw. bricht ab (Esc).
+// 2 = verschieben; "row rN" zieht Zeile N senkrecht, Pixel nach unten) über dieselben Schritte wie die Maus (Pixel nach rechts) und lässt los bzw. bricht ab (Esc).
 // Liefert die Kurzinfos der einzelnen Schritte.
 std::wstring simulateGanttDrag(const std::string& role, int grip, const std::vector<int>& pixels, bool cancel);
 

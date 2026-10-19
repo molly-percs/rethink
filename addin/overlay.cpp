@@ -331,6 +331,13 @@ void showOverlay(HWND owner, const OverlayContent& content, OverlayCallback call
         }
     }
 
+    // Einfügelinie beim Ziehen einer Zeile
+    if (!IsRectEmpty(&content.marker)) {
+        RECT r = content.marker;
+        OffsetRect(&r, -g_origin.x, -g_origin.y);
+        canvas.fill(r, kBlue, 1.0);
+    }
+
     // Kurzinfo beim Ziehen: weißes Kästchen mit blauem Rand über dem Element
     if (!content.tooltip.empty()) {
         HFONT tipFont = CreateFontW(-scaled(owner, 11), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,

@@ -10,6 +10,7 @@
 
 #include <ocidl.h>
 
+#include <algorithm>
 #include <cmath>
 #include <format>
 #include <string>
@@ -36,17 +37,19 @@ GanttGeometry g_gantt;                // Zeitplan
 double g_cachedLeft = -1, g_cachedTop = -1, g_cachedWidth = -1, g_cachedHeight = -1;
 OverlayContent g_shown;
 std::wstring g_tooltip;  // Kurzinfo während eines Ziehens
+RECT g_marker{};         // Einfügelinie beim Ziehen einer Zeile
 UINT_PTR g_trackTimer = 0;
 bool g_acting = false;
 
 // Ziehen eines Griffs (Maßstab und Schrittweite zu Beginn eingefroren)
-enum class DragKind { Segment, Gantt };
+enum class DragKind { Segment, Gantt, Row };
 struct Drag {
     DragKind kind = DragKind::Segment;
     bool active = false;  // Beginn war erfolgreich
     double start = 0, pixelsPerUnit = 0;
     int decimals = 0;
     double pointsPerPixel = 1;  // Zeitplan: Folienpunkte je Bildschirmpixel
+    int row = 0, target = 0;    // Zeile ziehen: Ausgangs- und Zielzeile
     std::wstring error;         // erst nach dem Loslassen melden: während des Ziehens hält das Overlay die Maus
 };
 bool g_dragging = false;
@@ -207,6 +210,16 @@ void addGanttHandles(OverlayContent& c, const Mapping& m) {
         if (s.flags != "shade" && r.right - r.left > grip * 3)
             handle({r.left + grip / 2 + 2, r.top, r.right - grip / 2 - 2, r.bottom}, OverlayAction::GanttMove, s.role, HandleStyle::Hidden);
     }
+    // Zeilen: unsichtbare Fläche über den Beschriftungen zum Ziehen nach oben/unten
+    for (int i = 0; g_gantt.valid && i < g_gantt.rowCount; ++i) {
+        const double top = g_gantt.rowsTop + i * g_gantt.rowH;
+        OverlayHandle h;
+        h.rect = {m.x(g_gantt.labelsLeft), m.y(top) + 1, m.x(g_gantt.plotLeft) - scaled(3), m.y(top + g_gantt.rowH) - 1};
+        h.action = OverlayAction::RowMove, h.style = HandleStyle::Hidden, h.dirX = 0, h.dirY = 1;
+        h.row = engine::gantt::kFirstActivityRow + i;
+        h.role = std::format("activity r{}", h.row);
+        if (h.rect.right > h.rect.left && !hitsGrip(h.rect, c.element)) c.handles.push_back(h);
+    }
     if (g_gantt.valid) {
         const int midY = (m.y(g_gantt.scaleTop) + m.y(g_gantt.scaleBottom)) / 2, half = scaled(7), w = scaled(9);
         const long left = m.x(g_gantt.plotLeft), right = m.x(g_gantt.plotRight);
@@ -236,6 +249,7 @@ OverlayContent buildContent(double left, double top, double width, double height
         c.tooltip = g_tooltip;
         c.tooltipAt = {cursor.x, c.element.top - scaled(4)};
     }
+    c.marker = g_marker;
     return c;
 }
 
@@ -332,6 +346,13 @@ void beginDrag(const OverlayHandle& handle) {
     g_dragging = true;
     g_drag = {};
     const Mapping m = currentMapping();
+    if (handle.action == OverlayAction::RowMove) {
+        g_drag.kind = DragKind::Row;
+        g_drag.pointsPerPixel = 1.0 / std::max(std::fabs(m.ay), 1e-6);
+        g_drag.row = g_drag.target = handle.row;
+        g_drag.active = g_gantt.valid && g_gantt.rowH > 0;
+        return;
+    }
     if (isGanttAction(handle.action)) {
         g_drag.kind = DragKind::Gantt;
         g_drag.pointsPerPixel = 1.0 / std::max(std::fabs(m.ax), 1e-6);
@@ -353,6 +374,24 @@ void beginDrag(const OverlayHandle& handle) {
 
 void dragStep(OverlayGesture gesture, int pixels) {
     const bool cancel = gesture == OverlayGesture::DragCancel;
+    if (g_drag.kind == DragKind::Row) {
+        // Zielzeile: wohin die Mitte der gezogenen Zeile fällt; blaue Linie an der Kante, an der sie eingefügt wird
+        const int first = engine::gantt::kFirstActivityRow, i = g_drag.row - first;
+        const double centre = g_gantt.rowsTop + (i + 0.5) * g_gantt.rowH + (cancel ? 0 : pixels * g_drag.pointsPerPixel);
+        const int slot = std::clamp(static_cast<int>(std::floor((centre - g_gantt.rowsTop) / g_gantt.rowH)), 0, g_gantt.rowCount - 1);
+        g_drag.target = first + slot;
+        g_marker = {};
+        if (g_drag.target != g_drag.row) {
+            const Mapping m = currentMapping();
+            const int y = m.y(g_gantt.rowsTop + (slot + (g_drag.target > g_drag.row ? 1 : 0)) * g_gantt.rowH);
+            g_marker = {m.x(g_gantt.labelsLeft), y - 1, m.x(g_gantt.plotRight), y + 2};
+        }
+        try {
+            placeOverlayDuringDrag();
+        } catch (...) {
+        }
+        return;
+    }
     if (g_drag.kind == DragKind::Gantt) {
         GanttGeometry geometry;
         std::wstring tooltip;
@@ -401,10 +440,19 @@ std::wstring dragGesture(const OverlayHandle& handle, OverlayGesture gesture, in
 
     std::wstring error = std::move(g_drag.error);
     try {
-        if (g_drag.kind == DragKind::Gantt) endGanttDrag(gesture == OverlayGesture::DragCancel || !g_drag.active);
+        if (g_drag.kind == DragKind::Row) {
+            g_marker = {};
+            if (gesture == OverlayGesture::DragEnd && g_drag.active && g_drag.target != g_drag.row) {
+                GanttHit hit;
+                hit.valid = true, hit.row = g_drag.row;
+                ganttCommand(g_app.Get(), std::format(L"moveRow={}", g_drag.target), hit);
+            }
+        } else if (g_drag.kind == DragKind::Gantt) endGanttDrag(gesture == OverlayGesture::DragCancel || !g_drag.active);
         else endSegmentDrag();
     } catch (const std::exception& e) {
         if (error.empty()) error = widen(e.what());
+    } catch (const winrt::hresult_error& e) {
+        if (error.empty()) error = e.message().c_str();
     } catch (...) {
     }
     g_dragging = false;
@@ -437,6 +485,13 @@ void onOverlayAction(const OverlayHandle& handle, OverlayGesture gesture, int pi
             case OverlayAction::Down:
                 adjustSegment(g_app.Get(), handle.row, handle.column, handle.action == OverlayAction::Up ? 1 : -1, shift);
                 if (g_element) placeOverlay(true);
+                break;
+            case OverlayAction::RowMove:
+                // Klick auf eine Zeilenbeschriftung wählt sie aus (fehlt die Spalte, passiert nichts)
+                try {
+                    if (g_element) selectInnerShape(g_element.Get(), handle.role);
+                } catch (...) {
+                }
                 break;
             case OverlayAction::GanttMove:
                 // Klick auf einen Balken/Meilenstein wählt ihn aus (wie PowerPoints zweiter Klick in eine Gruppe)
@@ -682,6 +737,7 @@ const wchar_t* actionName(OverlayAction a) {
         case OverlayAction::GanttStart: return L"anfang";
         case OverlayAction::GanttEnd: return L"ende";
         case OverlayAction::GanttMove: return L"verschieben";
+        case OverlayAction::RowMove: return L"zeile";
         case OverlayAction::RangeStart: return L"bereich-anfang";
         case OverlayAction::RangeEnd: return L"bereich-ende";
     }
@@ -732,7 +788,8 @@ void stopEvents() {
     if (g_dragging) {
         try {
             if (g_drag.kind == DragKind::Gantt) endGanttDrag(true);
-            else endSegmentDrag();
+            else if (g_drag.kind == DragKind::Segment) endSegmentDrag();
+            g_marker = {};
         } catch (...) {
         }
         g_dragging = false;
@@ -785,7 +842,11 @@ std::wstring simulateGanttDrag(const std::string& role, int grip, const std::vec
     g_element = rethinkElementOf(disp::object(disp::object(g_app.Get(), L"ActiveWindow").Get(), L"Selection").Get());
     OverlayHandle handle;
     handle.role = role, handle.dirX = 1, handle.dirY = 0;
-    handle.action = role == "range" ? (grip == 0 ? OverlayAction::RangeStart : OverlayAction::RangeEnd)
+    if (role.starts_with("row r")) {
+        if (g_element) readTargets();  // Zeilenlage steht im Gruppen-Tag
+        handle.action = OverlayAction::RowMove, handle.dirX = 0, handle.dirY = 1, handle.row = std::stoi(role.substr(5));
+    } else
+        handle.action = role == "range" ? (grip == 0 ? OverlayAction::RangeStart : OverlayAction::RangeEnd)
                                     : grip == 0 ? OverlayAction::GanttStart : grip == 1 ? OverlayAction::GanttEnd : OverlayAction::GanttMove;
     std::wstring tooltips;
     for (int p : pixels) {

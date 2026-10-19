@@ -43,11 +43,14 @@ constexpr wchar_t kLayoutTag[] = L"RETHINK_LAYOUT";  // Layout-Rahmen und Gruppe
 constexpr wchar_t kStyleTag[] = L"RETHINK_STYLE";    // zuletzt gesetzte Farbe einer Form (eigene Änderungen erkennen)
 constexpr wchar_t kSegmentTag[] = L"RETHINK_SEG";    // "pos", "neg", "e"; Zeitplan: "bar", "milestone", "bracket", "shade"
 constexpr wchar_t kKindTag[] = L"RETHINK_KIND";      // "waterfall up|down|right|left" oder "gantt"
+constexpr wchar_t kGanttTag[] = L"RETHINK_GANTT";    // Zeitplan: Zeitachse links;rechts;Skalen oben;unten (Punkt, beim Zeichnen)
 constexpr long kMsoShapeRectangle = 1;
 constexpr long kMsoTextOrientationHorizontal = 1;
 constexpr long kMsoGroup = 6;
 constexpr long kMsoAnchorMiddle = 3;
 constexpr long kMsoLineDash = 4;
+constexpr long kMsoLineSolid = 1;
+constexpr long kMsoLineSysDot = 11;
 constexpr long kPpSelectionShapes = 2;
 constexpr long kPpSelectionText = 3;
 
@@ -164,6 +167,26 @@ void formatText(IDispatch* shape, const Prim& p) {
     disp::put(disp::object(range.Get(), L"ParagraphFormat").Get(), L"Alignment", p.align == Align::Left ? 1L : p.align == Align::Right ? 3L : 2L);
 }
 
+// Umriss eines Rechtecks/einer Form: Farbe, Stärke, gestrichelt; ohne Farbe unsichtbar
+void applyOutline(IDispatch* shape, const Prim& p) {
+    auto line = disp::object(shape, L"Line");
+    if (p.stroke.kind == Color::Kind::None) {
+        disp::put(line.Get(), L"Visible", 0L);
+        return;
+    }
+    disp::put(line.Get(), L"Visible", -1L);
+    applyColor(disp::object(line.Get(), L"ForeColor").Get(), p.stroke);
+    disp::put(line.Get(), L"Weight", p.strokePt);
+    disp::put(line.Get(), L"DashStyle", p.dashed ? kMsoLineDash : p.dotted ? kMsoLineSysDot : kMsoLineSolid);
+}
+
+// Signatur von Füllung und Umriss: nur bei Änderungen der Vorgabe neu setzen (eigene Formatierung bleibt)
+std::wstring shapeSignature(const Prim& p) {
+    std::wstring sig = signature(p.fill);
+    if (p.stroke.kind != Color::Kind::None) sig += std::format(L"|{}|{:.2f}|{}", signature(p.stroke), p.strokePt, p.dashed ? L"d" : L"s");
+    return sig;
+}
+
 // Eine Grundform über das Objektmodell zeichnen.
 ComPtr<IDispatch> drawPrim(IDispatch* shapes, const Prim& p) {
     switch (p.kind) {
@@ -175,7 +198,7 @@ ComPtr<IDispatch> drawPrim(IDispatch* shapes, const Prim& p) {
             disp::call(fill.Get(), L"Solid");
             applyColor(disp::object(fill.Get(), L"ForeColor").Get(), p.fill);
             if (p.transparency > 0) disp::put(fill.Get(), L"Transparency", p.transparency);
-            disp::put(disp::object(shape.Get(), L"Line").Get(), L"Visible", 0L);
+            applyOutline(shape.Get(), p);
             disp::put(disp::object(shape.Get(), L"Shadow").Get(), L"Visible", 0L);
             if (p.rotation != 0) disp::put(shape.Get(), L"Rotation", p.rotation);
             if (!p.text.empty()) formatText(shape.Get(), p);
@@ -186,7 +209,7 @@ ComPtr<IDispatch> drawPrim(IDispatch* shapes, const Prim& p) {
             auto line = disp::object(shape.Get(), L"Line");
             disp::put(line.Get(), L"Weight", p.strokePt);
             applyColor(disp::object(line.Get(), L"ForeColor").Get(), p.stroke);
-            if (p.dashed) disp::put(line.Get(), L"DashStyle", kMsoLineDash);
+            if (p.dashed || p.dotted) disp::put(line.Get(), L"DashStyle", p.dashed ? kMsoLineDash : kMsoLineSysDot);
             return shape;
         }
         case Prim::Kind::Text: {
@@ -202,7 +225,7 @@ ComPtr<IDispatch> drawPrim(IDispatch* shapes, const Prim& p) {
 // Rolle, Farbsignatur und Segmentart an einer Form vermerken.
 void markShape(IDispatch* shape, const Prim& p) {
     disp::put(shape, L"Name", widen(p.role));
-    if (p.kind == Prim::Kind::Rect || p.kind == Prim::Kind::Shape) setTag(shape, kStyleTag, signature(p.fill));
+    if (p.kind == Prim::Kind::Rect || p.kind == Prim::Kind::Shape) setTag(shape, kStyleTag, shapeSignature(p));
     if (p.kind == Prim::Kind::Text) setTag(shape, kStyleTag, signature(p.textColor));
     if (!p.flags.empty()) setTag(shape, kSegmentTag, widen(p.flags));
 }
@@ -253,9 +276,10 @@ void updateShape(IDispatch* shape, const Prim& p) {
     }
     setGeometry(shape, p);
     if (p.kind == Prim::Kind::Rect || p.kind == Prim::Kind::Shape) {
-        const auto sig = signature(p.fill);
+        const auto sig = shapeSignature(p);
         if (tagValue(shape, kStyleTag) != sig) {
             applyColor(disp::object(disp::object(shape, L"Fill").Get(), L"ForeColor").Get(), p.fill);
+            applyOutline(shape, p);
             setTag(shape, kStyleTag, sig);
         }
         if (tagValue(shape, kSegmentTag) != widen(p.flags)) setTag(shape, kSegmentTag, widen(p.flags));
@@ -382,6 +406,22 @@ void storeLayout(IDispatch* group, const Box& b) {
     setTag(group, kLayoutTag, std::format(L"{};{};{};{};{};{};{};{}", pt(b.x), pt(b.y), pt(b.w), pt(b.h), g.left, g.top, g.width, g.height));
 }
 
+// Zeitplan: Zeitachse und Skalenband (Folienpunkte) für die Griffe des Overlays vermerken.
+void storeGanttGeometry(IDispatch* group, const Drawing& d) {
+    if (!d.axis.valid) return;
+    // Zeilen: Oberkante, Höhe und Anzahl der Aktivitätszeilen, linker Rand (für das Ziehen von Zeilen)
+    double rowsTop = 0, rowH = 0;
+    int rows = 0;
+    for (auto& r : d.rows)
+        if (r.row >= gantt::kFirstActivityRow) {
+            if (rows++ == 0) rowsTop = pt(r.y);
+            rowH = pt(r.h);
+        }
+    const std::wstring value = std::format(L"{};{};{};{};{};{};{};{}", pt(d.axis.x0), pt(d.axis.x0 + d.axis.w), pt(d.scaleTop), pt(d.scaleBottom),
+                                           rowsTop, rowH, rows, pt(d.bounds.x));
+    if (tagValue(group, kGanttTag) != value) setTag(group, kGanttTag, value);
+}
+
 // Zeichnet ein Element (neu oder an Ort und Stelle) und vermerkt Modell und Layout.
 // Ist das Element (oder eine Form darin) gerade ausgewählt?
 bool isSelected(IDispatch* slide, IDispatch* group) {
@@ -419,6 +459,7 @@ ComPtr<IDispatch> renderElement(IDispatch* slide, ComPtr<IDispatch> group, const
     setTag(group.Get(), kModelTag, prepared.model);
     if (tagValue(group.Get(), kKindTag) != prepared.kind) setTag(group.Get(), kKindTag, prepared.kind);
     storeLayout(group.Get(), prepared.drawing.bounds);
+    storeGanttGeometry(group.Get(), prepared.drawing);
     return group;
 }
 
@@ -1371,6 +1412,12 @@ GanttGeometry geometryOfDrawing(const Drawing& d) {
         g.shapes.push_back(s);
     }
     g.plotLeft = pt(d.axis.x0), g.plotRight = pt(d.axis.x0 + d.axis.w), g.scaleTop = pt(d.scaleTop), g.scaleBottom = pt(d.scaleBottom);
+    for (auto& r : d.rows)
+        if (r.row >= gantt::kFirstActivityRow) {
+            if (g.rowCount++ == 0) g.rowsTop = pt(r.y);
+            g.rowH = pt(r.h);
+        }
+    g.labelsLeft = pt(d.bounds.x);
     return g;
 }
 
@@ -1419,23 +1466,27 @@ GanttGeometry ganttGeometryOf(IDispatch* element) {
     GanttGeometry g;
     auto items = disp::object(element, L"GroupItems");
     const long count = disp::call(items.Get(), L"Count").toLong();
-    bool haveStart = false, haveEnd = false;
     for (long i = 1; i <= count; ++i) {
         auto shape = disp::object(items.Get(), L"Item", i);
-        const std::wstring name = disp::call(shape.Get(), L"Name").str();
-        if (name == L"scale start" || name == L"scale end") {
-            const Rect r = rectOf(shape.Get());
-            (name == L"scale start" ? g.plotLeft : g.plotRight) = r.left;
-            g.scaleTop = r.top, g.scaleBottom = r.top + r.height;
-            (name == L"scale start" ? haveStart : haveEnd) = true;
-            continue;
-        }
         const std::string flags = narrow(tagValue(shape.Get(), kSegmentTag));
         if (!draggable(flags)) continue;
         const Rect r = rectOf(shape.Get());
-        g.shapes.push_back({narrow(name), flags, r.left, r.top, r.width, r.height});
+        g.shapes.push_back({narrow(disp::call(shape.Get(), L"Name").str()), flags, r.left, r.top, r.width, r.height});
     }
-    g.valid = haveStart && haveEnd;
+    // Zeitachse und Skalenband aus dem Tag beim letzten Zeichnen, um die seither verschobene Gruppe versetzt
+    std::wistringstream in(tagValue(element, kGanttTag));
+    double plotLeft = 0, plotRight = 0, scaleTop = 0, scaleBottom = 0, rowsTop = 0, rowH = 0, left = 0;
+    int rows = 0;
+    wchar_t sep = 0;
+    in >> plotLeft >> sep >> plotRight >> sep >> scaleTop >> sep >> scaleBottom >> sep >> rowsTop >> sep >> rowH >> sep >> rows >> sep >> left;
+    const auto layout = storedLayout(element);
+    if (!in.fail() && layout) {
+        const Rect now = rectOf(element);
+        const double dx = now.left - layout->group.left, dy = now.top - layout->group.top;
+        g.plotLeft = plotLeft + dx, g.plotRight = plotRight + dx, g.scaleTop = scaleTop + dy, g.scaleBottom = scaleBottom + dy;
+        g.rowsTop = rowsTop + dy, g.rowH = rowH, g.rowCount = rows, g.labelsLeft = left + dx;
+        g.valid = true;
+    }
     return g;
 }
 
@@ -1823,6 +1874,10 @@ void ganttCommand(IDispatch* app, const std::wstring& command, const GanttHit& h
                 {L"triangle", L"Dreieck"}, {L"circle", L"Kreis"},   {L"square", L"Quadrat"},   {L"star", L"Stern"}};
             setGanttText(item, row, marker ? gantt::kMarkerCol : gantt::kShapeCol, canonical.empty() ? L"" : kNames.at(canonical));
         });
+    } else if (key == L"moveRow") {
+        // Zeile an eine andere Stelle ziehen (Overlay): übernimmt dort die Kategorie, Datenblatt und Excel folgen
+        const int row = requireRow(hit), target = std::stoi(value);
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { moveGanttRowTo(item, o, row, target); });
     } else if (key == L"link") {
         const int row = requireRow(hit);
         modifyGantt(app, e, [&](DataItem& item, ChartOptions&) { toggleGanttLink(item, row, value); });
@@ -1853,7 +1908,7 @@ GanttState ganttState(IDispatch* app, const GanttHit& hit) {
     s.scales = m.drawing.scales;
     const GanttLook look = ganttLook(s.options);
     s.barHeight = look.barHeight, s.barShape = look.barShape, s.marker = look.marker;
-    s.categoryStyle = look.categoryStyle, s.categoryColors = look.categoryColors, s.separators = look.separators, s.rowSeparators = look.rowSeparators;
+    s.categoryStyle = look.categoryStyle, s.categoryColors = look.categoryColors, s.separators = look.separators, s.rowSeparators = look.rowSeparators, s.milestoneLines = look.milestoneLines;
     auto drawn = [&](const char* role) { return std::any_of(m.drawing.prims.begin(), m.drawing.prims.end(), [&](const Prim& p) { return p.role == role; }); };
     s.categoryShown = drawn("headline category"), s.responsibleShown = drawn("headline responsible"), s.remarkShown = drawn("headline remark");
     for (size_t r = gantt::kFirstActivityRow; r < m.item.table.size(); ++r)
@@ -1909,7 +1964,7 @@ bool ganttPressed(IDispatch* app, const std::wstring& id, const GanttHit& hit) {
     if (id == L"rtkT_rowSeparators") return s.rowSeparators;
     if (id == L"rtkT_barLabels") return g.barLabels != BarLabel::None;
     if (id == L"rtkT_milestoneLabels") return g.milestoneLabels;
-    if (id == L"rtkT_milestoneLines") return g.milestoneLines;
+    if (id == L"rtkT_milestoneLines") return s.milestoneLines;
     if (id == L"rtkT_headlines") return g.headlines;
     if (id == L"rtkT_today") return g.todayLine;
     if (id == L"rtkT_rowShade") return s.rowShaded;

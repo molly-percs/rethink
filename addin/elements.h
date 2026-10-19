@@ -90,6 +90,8 @@ struct GanttGeometry {
     bool valid = false;
     std::vector<GanttShape> shapes;
     double plotLeft = 0, plotRight = 0, scaleTop = 0, scaleBottom = 0;
+    double rowsTop = 0, rowH = 0, labelsLeft = 0;  // Aktivitätszeilen (Zeile 2 ab rowsTop) und linker Rand der Beschriftungen
+    int rowCount = 0;
 };
 GanttGeometry ganttGeometryOf(IDispatch* element);
 
@@ -119,7 +121,7 @@ GanttHit ganttHitAt(IDispatch* element, double x, double y);
 // "scale:day=1", "scales=auto", "format:month=MMM", "dateFormat=dd.MM.yy", "barLabels=range", "column:category=1",
 // "categoryStyle=block", "categoryColors=1", "links=1", "link=Analyse" (Vorgänger der Zeile umschalten), "rowShape=chevron",
 // "rowMarker=star", "barShape=rounded", "milestoneShape=circle", "rowShade=1", "insertRow", "duplicateRow", "deleteRow",
-// "rowUp", "rowDown", "new=bar|milestone|bracket|shade|pentagon|chevron", "deleteItem", "fit", "calendar", "datasheet",
+// "rowUp", "rowDown", "moveRow=5" (Zeile an Index 5, übernimmt dort die Kategorie), "new=bar|milestone|bracket|shade|pentagon|chevron", "deleteItem", "fit", "calendar", "datasheet",
 // "sortCategories" (Dialog) bzw. "sortCategories=Bau|Planung". Die IDs des PowerPoint-Kontextmenüs (rtkG_…) gehen auch.
 void ganttCommand(IDispatch* app, const std::wstring& command, const GanttHit& hit);
 // Umschalter des PowerPoint-Kontextmenüs (z. B. "rtkT_separators"): Zustand lesen bzw. setzen.
@@ -133,7 +135,7 @@ struct GanttState {
     double barHeight = 0.55;               // wirksam (Optionen oder Design)
     std::wstring barShape, marker;
     engine::CategoryStyle categoryStyle = engine::CategoryStyle::Bracket;
-    bool categoryColors = false, separators = true, rowSeparators = false;
+    bool categoryColors = false, separators = true, rowSeparators = false, milestoneLines = false;
     bool categoryShown = false, responsibleShown = false, remarkShown = false;
     std::vector<std::wstring> activities;  // Beschriftung je Aktivitätszeile (Zeile 2 = Index 0)
     std::vector<std::wstring> categories;

@@ -44,6 +44,9 @@ int insertGanttRow(DataItem& item, ChartOptions& options, int before, const std:
 void duplicateGanttRow(DataItem& item, ChartOptions& options, int row, bool above);
 void deleteGanttRow(DataItem& item, ChartOptions& options, int row);
 bool moveGanttRow(DataItem& item, ChartOptions& options, int row, int delta);  // false am Rand
+// Zeile im Diagramm an die Stelle `target` ziehen (die anderen rücken nach). Gibt es Kategorien, übernimmt die Zeile
+// die Kategorie der Zeile, auf die sie gezogen wurde – so wandert sie auch in eine andere Kategorie. false = unverändert.
+bool moveGanttRowTo(DataItem& item, ChartOptions& options, int row, int target);
 
 // Neues Element an einem Datum in einer Zeile (Kontextmenü an der Mausposition). Balken und Meilensteine landen
 // im Datenblatt, wenn die Zeile dort noch keine hat; sonst als frei gesetztes Element. Dauer neuer Balken: `days`.
@@ -56,6 +59,14 @@ void setGanttText(DataItem& item, int row, int column, const std::wstring& text)
 
 // Vorgänger (Spalte 7) umschalten: ist `predecessor` eingetragen, wird er entfernt, sonst angehängt. Liefert den neuen Zustand.
 bool toggleGanttLink(DataItem& item, int row, const std::wstring& predecessor);
+
+// Aussehen des Elements hinter einem Ziel (Zeilenstil des Datenblatt-Balkens/-Meilensteins oder Stil des freien Elements);
+// legt den Zeilenstil bei Bedarf an.
+ShapeStyle& ganttStyle(ChartOptions& options, const GanttTarget& target);
+
+// Zeilen wurden im Datenblatt eingefügt (delta > 0, vor `from`) oder gelöscht (delta < 0, ab `from`): Elemente,
+// Schattierungen und Zeilenstile wandern mit bzw. entfallen.
+void shiftGanttRows(ChartOptions& options, int from, int delta);
 
 // Aktivitätszeilen nach Kategorie sortieren: zuerst die Kategorien in `order`, dann übrige in Reihenfolge ihres Auftretens,
 // Zeilen ohne Kategorie zuletzt; innerhalb einer Kategorie bleibt die Reihenfolge. Frei gesetzte Elemente wandern mit.

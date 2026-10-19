@@ -58,7 +58,8 @@ try {
     # Maßstab für Erwartungen: Folienpunkte je Bildschirmpixel und je Tag
     $win = $pp.ActiveWindow
     $ptPerPx = 1000 / ($win.PointsToScreenPixelsX(1000) - $win.PointsToScreenPixelsX(0))
-    $plotW = $group.GroupItems.Item('scale end').Left - $group.GroupItems.Item('scale start').Left
+    $geo = $group.Tags.Item('RETHINK_GANTT') -split ';' | ForEach-Object { [double]::Parse($_, [Globalization.CultureInfo]::InvariantCulture) }
+    $plotW = $geo[1] - $geo[0]  # plotLeft;plotRight;… in Folienpunkten
     $days = ((D (($t['range'] -split '\.\.')[1])) - (D (($t['range'] -split '\.\.')[0]))).TotalDays + 1
     $ptPerDay = $plotW / $days
     function Px([double]$d) { [int][math]::Round($d * $ptPerDay / $ptPerPx) }  # Mausweg für d Tage bei der aktuellen Zoomstufe
@@ -223,6 +224,13 @@ try {
     $g = $slide.Shapes.Item($name)
     Expect ($g.GroupItems.Item('activity r2').TextFrame.TextRange.Text -eq 'Konzept' -and $g.GroupItems.Item('activity r4').TextFrame.TextRange.Text -eq 'Analyse') 'nach Kategorie sortiert: Bau zuerst, Reihenfolge innerhalb bleibt'
     Expect ($api.DatasheetCell(2, 0) -eq 'Konzept' -and $api.DatasheetCell(2, 6) -eq 'Bau') 'offenes Datenblatt zeigt die sortierte Tabelle'
+    # Zeile im Diagramm zwei Zeilen nach unten ziehen: landet in „Planung“, Datenblatt folgt
+    $rowPx = [int][math]::Round(($g.GroupItems.Item('activity r3').Top - $g.GroupItems.Item('activity r2').Top) / $ptPerPx)
+    $g.Select()
+    [void]$api.GanttDrag('row r2', 2, "$([int]($rowPx / 2));$(2 * $rowPx)", $false)
+    $g = $slide.Shapes.Item($name)
+    Expect ($g.GroupItems.Item('activity r4').TextFrame.TextRange.Text -eq 'Konzept') 'Zeile per Ziehen verschoben'
+    Expect ($api.DatasheetCell(4, 0) -eq 'Konzept' -and $api.DatasheetCell(4, 6) -eq 'Planung') "Zeile übernimmt die Kategorie der Ablagestelle ($($api.DatasheetCell(4, 6)))"
     $api.CloseDatasheet()
     $api.GanttCommand('design=modern')
     $roles = Roles $slide.Shapes.Item($name)

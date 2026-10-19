@@ -51,8 +51,9 @@ struct Prim {
     Emu x = 0, y = 0, w = 0, h = 0;  // Linie: von (x, y) nach (x + w, y + h)
     Color fill, stroke, textColor;
     double transparency = 0;  // Füllung: 1 = unsichtbar, aber anklickbar (Fläche hinter dem Diagramm)
-    double strokePt = 0.75;
-    bool dashed = false;
+    double strokePt = 0.75;   // Linie; Rechteck/Form: Umriss, wenn stroke gesetzt ist
+    bool dashed = false;      // gestrichelt (Linie oder Umriss)
+    bool dotted = false;      // gepunktet
     std::wstring text;
     double fontPt = 12;
     Align align = Align::Center;
@@ -174,16 +175,19 @@ struct GanttLook {
     double barHeight = 0.55;
     std::wstring barShape, marker;  // kanonische Namen
     CategoryStyle categoryStyle = CategoryStyle::Bracket;
-    bool categoryColors = false, separators = true, rowSeparators = false;
+    bool categoryColors = false, separators = true, rowSeparators = false, milestoneLines = false;
 };
 GanttLook ganttLook(const GanttOptions& options);
+
+// Vorgabeformat der Datumsbeschriftungen nach Sprache (dd.MM.yyyy bzw. M/d/yyyy).
+std::wstring ganttDateFormat(const GanttOptions& options, const std::wstring& language);
 
 // Kategorien in der Reihenfolge ihres ersten Auftretens (leere ausgenommen).
 std::vector<std::wstring> ganttCategories(const DataItem& item);
 // Formnamen der Spalten 8/9 (deutsch oder englisch) → kanonisch ("bar", "rounded", "pentagon", "chevron" bzw.
 // "diamond", "triangle", "circle", "square", "star"); leer, wenn unbekannt.
 std::wstring canonicalBarShape(const std::wstring& name);
-std::wstring canonicalMarker(const std::wstring& name);
+std::wstring canonicalMarker(const std::wstring& name);  // "triangle" = ▲ (Vorgabe des Originals), "triangleDown" = ▼
 
 // Datum einer Zelle (Datum oder ISO-Text), sonst nullopt.
 std::optional<double> cellDate(const Cell& cell);

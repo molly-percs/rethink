@@ -209,7 +209,7 @@ constexpr const wchar_t* kItemKinds[] = {L"bar", L"pentagon", L"chevron", L"mile
 constexpr const wchar_t* kDesigns[] = {L"standard", L"modern", L"contrast", L"minimal"};
 constexpr const wchar_t* kCategoryStyles[] = {L"bracket", L"block", L"text"};
 constexpr const wchar_t* kBarShapes[] = {L"bar", L"rounded", L"pentagon", L"chevron"};
-constexpr const wchar_t* kMarkers[] = {L"diamond", L"triangle", L"circle", L"square", L"star"};
+constexpr const wchar_t* kMarkers[] = {L"diamond", L"triangle", L"triangleDown", L"circle", L"square", L"star"};
 
 void checkDate(const std::wstring& value, const std::string& where, const char* key) {
     if (!value.empty() && !std::regex_match(value, kDate))
@@ -218,6 +218,36 @@ void checkDate(const std::wstring& value, const std::string& where, const char* 
 
 // Schlüssel vorhanden und nicht null (null = Vorgabe des Designs)
 bool present(const JsonObject& o, const wchar_t* key) { return o.HasKey(key) && o.GetNamedValue(key).ValueType() != JsonValueType::Null; }
+
+// Farbe einer Stilangabe: Designfarbe, "#RRGGBB" oder "none"
+void checkStyleColor(const std::wstring& value, const std::string& where) {
+    static const std::wregex kTheme(LR"(^(tx1|tx2|bg1|bg2|accent[1-6]|none|#[0-9A-Fa-f]{6})$)");
+    if (!value.empty() && !std::regex_match(value, kTheme))
+        fail(where, "Farbe muss eine Designfarbe (tx1, bg1, tx2, bg2, accent1 … accent6), \"#rrggbb\" oder \"none\" sein");
+}
+
+engine::ShapeStyle parseStyle(const IJsonValue& value, const std::string& where) {
+    if (value.ValueType() != JsonValueType::Object) fail(where, "Stil muss ein Objekt sein");
+    const JsonObject o = value.GetObject();
+    engine::ShapeStyle s;
+    s.fill = optionalString(o, L"fill", L"", where.c_str());
+    s.line = optionalString(o, L"line", L"", where.c_str());
+    checkStyleColor(s.fill, where);
+    checkStyleColor(s.line, where);
+    s.lineWeight = optionalNumber(o, L"weight", 0);
+    if (s.lineWeight < 0 || s.lineWeight > 12) fail(where, "\"weight\" muss zwischen 0 und 12 pt liegen");
+    s.dashed = optionalBool(o, L"dashed", false);
+    return s;
+}
+
+JsonObject styleJson(const engine::ShapeStyle& s) {
+    JsonObject o;
+    if (!s.fill.empty()) o.SetNamedValue(L"fill", JsonValue::CreateStringValue(s.fill));
+    if (!s.line.empty()) o.SetNamedValue(L"line", JsonValue::CreateStringValue(s.line));
+    if (s.lineWeight > 0) o.SetNamedValue(L"weight", JsonValue::CreateNumberValue(s.lineWeight));
+    if (s.dashed) o.SetNamedValue(L"dashed", JsonValue::CreateBooleanValue(true));
+    return o;
+}
 
 void parseGantt(const JsonObject& o, engine::GanttOptions& g) {
     g.start = optionalString(o, L"start", g.start);
@@ -258,7 +288,7 @@ void parseGantt(const JsonObject& o, engine::GanttOptions& g) {
     g.links = optionalBool(o, L"links", g.links);
     g.barLabels = static_cast<engine::BarLabel>(optionalChoice(o, L"barLabels", kBarLabels, static_cast<int>(g.barLabels)));
     g.milestoneLabels = optionalBool(o, L"milestoneLabels", g.milestoneLabels);
-    g.milestoneLines = optionalBool(o, L"milestoneLines", g.milestoneLines);
+    if (present(o, L"milestoneLines")) g.milestoneLines = optionalBool(o, L"milestoneLines", false);
     g.dateFormat = optionalString(o, L"dateFormat", g.dateFormat);
     if (o.HasKey(L"formats")) {
         auto v = o.GetNamedValue(L"formats");
@@ -307,7 +337,24 @@ void parseGantt(const JsonObject& o, engine::GanttOptions& g) {
             if (it.kind != engine::GanttItem::Kind::Milestone && it.end.empty()) fail(where, "\"end\" fehlt");
             it.text = optionalString(e, L"text", L"", where.c_str());
             if (e.HasKey(L"fill")) it.fill = parseFill(optionalString(e, L"fill", L"", where.c_str()), where);
+            if (present(e, L"style")) it.style = parseStyle(e.GetNamedValue(L"style"), where + ".style");
             g.items.push_back(it);
+        }
+    }
+    if (present(o, L"rowStyles")) {
+        auto v = o.GetNamedValue(L"rowStyles");
+        if (v.ValueType() != JsonValueType::Array) fail("chart", "\"rowStyles\" muss ein Array sein");
+        const JsonArray list = v.GetArray();
+        for (uint32_t i = 0; i < list.Size(); ++i) {
+            const std::string where = std::format("chart.rowStyles[{}]", i);
+            if (list.GetAt(i).ValueType() != JsonValueType::Object) fail(where, "Eintrag muss ein Objekt sein");
+            const JsonObject e = list.GetAt(i).GetObject();
+            engine::RowStyle s;
+            s.row = static_cast<int>(optionalNumber(e, L"row", -1));
+            if (s.row < 1) fail(where, "\"row\" muss eine Zeilennummer ab 1 sein");
+            if (present(e, L"bar")) s.bar = parseStyle(e.GetNamedValue(L"bar"), where + ".bar");
+            if (present(e, L"milestone")) s.milestone = parseStyle(e.GetNamedValue(L"milestone"), where + ".milestone");
+            g.rowStyles.push_back(s);
         }
     }
 }
@@ -415,7 +462,7 @@ std::wstring ganttEditsJson(const engine::GanttOptions& g) {
     o.SetNamedValue(L"formats", formats);
     o.SetNamedValue(L"barLabels", JsonValue::CreateStringValue(kBarLabels[static_cast<int>(g.barLabels)]));
     o.SetNamedValue(L"milestoneLabels", JsonValue::CreateBooleanValue(g.milestoneLabels));
-    o.SetNamedValue(L"milestoneLines", JsonValue::CreateBooleanValue(g.milestoneLines));
+    o.SetNamedValue(L"milestoneLines", optionalBoolValue(g.milestoneLines));
     if (g.responsible) o.SetNamedValue(L"responsible", JsonValue::CreateBooleanValue(*g.responsible));
     if (g.remark) o.SetNamedValue(L"remark", JsonValue::CreateBooleanValue(*g.remark));
     o.SetNamedValue(L"headlines", JsonValue::CreateBooleanValue(g.headlines));
@@ -433,9 +480,20 @@ std::wstring ganttEditsJson(const engine::GanttOptions& g) {
         if (!it.end.empty()) e.SetNamedValue(L"end", JsonValue::CreateStringValue(it.end));
         if (!it.text.empty()) e.SetNamedValue(L"text", JsonValue::CreateStringValue(it.text));
         if (it.fill) e.SetNamedValue(L"fill", JsonValue::CreateStringValue(std::format(L"#{:06X}", *it.fill)));
+        if (!it.style.empty()) e.SetNamedValue(L"style", styleJson(it.style));
         items.Append(e);
     }
     o.SetNamedValue(L"items", items);
+    JsonArray rowStyles;
+    for (auto& s : g.rowStyles) {
+        if (s.bar.empty() && s.milestone.empty()) continue;
+        JsonObject e;
+        e.SetNamedValue(L"row", JsonValue::CreateNumberValue(s.row));
+        if (!s.bar.empty()) e.SetNamedValue(L"bar", styleJson(s.bar));
+        if (!s.milestone.empty()) e.SetNamedValue(L"milestone", styleJson(s.milestone));
+        rowStyles.Append(e);
+    }
+    o.SetNamedValue(L"rowStyles", rowStyles);
     return std::wstring(o.Stringify());
 }
 

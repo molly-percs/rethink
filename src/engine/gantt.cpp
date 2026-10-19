@@ -20,14 +20,19 @@ constexpr std::uint32_t kToday = 0xC00000;
 // ---- Gestaltung ----
 
 // Eine Vorlage legt Formen, Linien und Farben fest; Farben sind Designfarben des Folienmasters.
+// Standard folgt dem Aussehen des Originals: Skalen fett und linksbündig ohne Teilstriche, Monatslinien durchgezogen,
+// Wochenlinien gepunktet, Rahmen links/rechts der Zeitachse, schwarze Balken, ▲ in der Meilensteinzeile mit gestrichelter
+// Linie durch das Diagramm und Datum darunter.
 struct DesignSpec {
     double barHeight = 0.55;
     const wchar_t* barShape = L"bar";
     const wchar_t* marker = L"diamond";
     CategoryStyle categoryStyle = CategoryStyle::Bracket;
     bool categoryColors = false;
-    bool separators = true, rowSeparators = false, rowStripes = false;
+    bool separators = true, rowSeparators = false, rowStripes = false, milestoneLines = false;
     bool headerBand = false;
+    bool scaleBold = false, scaleTicks = true, fineDotted = false, frame = false, milestoneDateBelow = false;
+    Align scaleAlign = Align::Center;
     Color headerFill, headerText = Color::schemeColor(L"tx1"), scaleLine = Color::schemeColor(L"tx1", 0.75);
     Color text = Color::schemeColor(L"tx1"), grid = Color::schemeColor(L"tx1", 0.75), rule = Color::schemeColor(L"tx1");
     Color bar = Color::schemeColor(L"accent1"), milestone = Color::schemeColor(L"accent2");
@@ -37,7 +42,13 @@ struct DesignSpec {
 DesignSpec designSpec(GanttDesign design) {
     DesignSpec s;
     switch (design) {
-        case GanttDesign::Standard: break;
+        case GanttDesign::Standard:
+            s.barHeight = 0.3, s.marker = L"triangle", s.milestoneLines = true;
+            s.scaleBold = true, s.scaleTicks = false, s.fineDotted = true, s.frame = true, s.milestoneDateBelow = true;
+            s.scaleAlign = Align::Left;
+            s.grid = Color::schemeColor(L"tx1"), s.scaleLine = Color::schemeColor(L"tx1");
+            s.bar = Color::schemeColor(L"tx1"), s.milestone = Color::schemeColor(L"tx1");
+            break;
         case GanttDesign::Modern:
             s.barHeight = 0.5, s.barShape = L"rounded", s.marker = L"circle";
             s.categoryStyle = CategoryStyle::Block, s.categoryColors = true;
@@ -52,7 +63,7 @@ DesignSpec designSpec(GanttDesign design) {
             s.headerFill = Color::schemeColor(L"tx2"), s.headerText = Color::schemeColor(L"bg1"), s.scaleLine = Color::schemeColor(L"bg1", -0.35);
             break;
         case GanttDesign::Minimal:
-            s.barHeight = 0.35, s.marker = L"triangle";
+            s.barHeight = 0.35, s.marker = L"triangleDown";
             s.categoryStyle = CategoryStyle::Text, s.separators = false;
             s.grid = Color::schemeColor(L"tx1", 0.85), s.text = Color::schemeColor(L"tx1", 0.25), s.headerText = Color::schemeColor(L"tx1", 0.25);
             break;
@@ -74,7 +85,8 @@ Preset barPreset(const std::wstring& shape) {
     return {nullptr, 0};
 }
 Preset markerPreset(const std::wstring& marker) {
-    if (marker == L"triangle") return {"triangle", 180};  // Spitze nach unten
+    if (marker == L"triangle") return {"triangle", 0};        // ▲ wie im Original
+    if (marker == L"triangleDown") return {"triangle", 180};  // ▼
     if (marker == L"circle") return {"ellipse", 0};
     if (marker == L"square") return {"rect", 0};
     if (marker == L"star") return {"star5", 0};
@@ -114,8 +126,8 @@ double workTime(double a, double b, int first, int last) {
 
 // Vorgabeformate einer Skala, lang → kurz
 const std::vector<const wchar_t*>& defaultFormats(TimeUnit unit) {
-    static const std::vector<const wchar_t*> day{L"ddd dd", L"dd", L"d"}, week{L"dd.MM.", L"ww"}, month{L"MMMM", L"MMM", L"MMMMM"},
-        quarter{L"\"Q\"Q yyyy", L"\"Q\"Q", L"Q"}, year{L"yyyy", L"yy"};
+    // wie im Original: Monat kurz („Okt“), Kalenderwoche als Zahl, Tag als Zahl
+    static const std::vector<const wchar_t*> day{L"d"}, week{L"w"}, month{L"MMM", L"MMMMM"}, quarter{L"\"Q\"Q", L"Q"}, year{L"yyyy", L"yy"};
     switch (unit) {
         case TimeUnit::Day: return day;
         case TimeUnit::Week: return week;
@@ -266,9 +278,25 @@ struct Layout {
         taken.clear();
     }
 
+    // Farbe einer Stilangabe: Designfarbe, "#RRGGBB" oder "none"; leer = Vorgabe
+    static Color styleColor(const std::wstring& value, const Color& fallback) {
+        if (value.empty()) return fallback;
+        if (value == L"none") return Color::none();
+        if (value.size() == 7 && value[0] == L'#') return Color::rgbColor(static_cast<std::uint32_t>(std::wcstoul(value.c_str() + 1, nullptr, 16)));
+        return Color::schemeColor(value);
+    }
+    static void applyStyle(Prim& p, const ShapeStyle& style) {
+        p.fill = styleColor(style.fill, p.fill);
+        if (!style.line.empty() || style.lineWeight > 0 || style.dashed) {
+            p.stroke = styleColor(style.line, Color::schemeColor(L"tx1"));
+            p.strokePt = style.lineWeight > 0 ? style.lineWeight : 1.5;
+            p.dashed = style.dashed;
+        }
+    }
+
     // Balken (auch abgerundet, Fünfeck, Chevron) mit Pfeilen an abgeschnittenen Enden und Datumsbeschriftung
     std::optional<Box> bar(const std::string& role, int row, double s, double e, const wchar_t* shapeName, const std::wstring& inner, Color fill,
-                           BarLabel label) {
+                           BarLabel label, const ShapeStyle& style = {}) {
         Emu y, h;
         if (!band(row, y, h) || !visible(s, e)) return std::nullopt;
         const Emu x0 = x(std::max(s, axis.t0)), x1 = x(std::min(e, axis.t1));
@@ -277,6 +305,7 @@ struct Layout {
         const Preset preset = barPreset(shapeName);
         Prim p = preset.name ? shape(preset.name, x0, by, x1 - x0, barH, fill, role) : rect(x0, by, x1 - x0, barH, fill, role);
         p.flags = "bar";
+        applyStyle(p, style);
         if (!inner.empty()) {
             p.text = inner;
             p.fontPt = o.fontPt;
@@ -293,20 +322,31 @@ struct Layout {
         return Box{p.x, p.y, p.w, p.h};
     }
 
-    // Meilenstein mit Datumsbeschriftung daneben
-    void milestone(const std::string& role, const std::string& labelRole, int row, double t, Color fill, const std::wstring& marker,
-                   const std::wstring& caption) {
+    // Meilenstein mit Datumsbeschriftung daneben; in der Meilensteinzeile (Standard) oben, Datum mittig darunter
+    std::optional<Box> milestone(const std::string& role, const std::string& labelRole, int row, double t, Color fill, const std::wstring& marker,
+                                 const std::wstring& caption, const ShapeStyle& style = {}) {
         Emu y, h;
-        if (!band(row, y, h) || t < axis.t0 || t >= axis.t1) return;
+        if (!band(row, y, h) || t < axis.t0 || t >= axis.t1) return std::nullopt;
         const double at = axis.dayScale ? std::floor(t) + 0.5 : std::floor(t);  // Tagesmitte nur mit Tagesskala
-        const Emu size = std::min<Emu>(h * 65 / 100, th);
+        const bool stacked = row == kMilestoneRow && spec.milestoneDateBelow;
+        const Emu size = stacked ? th * 3 / 4 : std::min<Emu>(h * 65 / 100, th);
         const Emu cx = x(at);
         const Preset preset = markerPreset(marker);
-        Prim p = shape(preset.name, cx - size / 2, y + (h - size) / 2, size, size, fill, role, preset.rotation);
+        const Emu my = stacked ? y + th / 10 : y + (h - size) / 2;
+        Prim p = shape(preset.name, cx - size / 2, my, size, size, fill, role, preset.rotation);
         p.flags = "milestone";
+        applyStyle(p, style);
         d.prims.push_back(p);
         taken.push_back({p.x, p.y, p.w, p.h});
-        if (!caption.empty()) pending.push_back({{p.x, p.y, p.w, p.h}, caption, labelRole, y, h});
+        if (stacked && !caption.empty()) {
+            const Emu tw = textWidth(caption, o.fontPt) + th / 4;
+            const Box r{std::clamp<Emu>(cx - tw / 2, plot.x - th, right - tw), my + size + th / 12, tw, th};
+            d.prims.push_back(text(r.x, r.y, r.w, r.h, caption, o.fontPt, Align::Center, spec.text, labelRole));
+            taken.push_back(r);
+        } else if (!caption.empty()) {
+            pending.push_back({{p.x, p.y, p.w, p.h}, caption, labelRole, y, h});
+        }
+        return Box{p.x, p.y, p.w, p.h};
     }
 };
 
@@ -324,7 +364,12 @@ GanttLook ganttLook(const GanttOptions& g) {
     look.categoryColors = g.categoryColors.value_or(spec.categoryColors);
     look.separators = g.separators.value_or(spec.separators);
     look.rowSeparators = g.rowSeparators.value_or(spec.rowSeparators);
+    look.milestoneLines = g.milestoneLines.value_or(spec.milestoneLines);
     return look;
+}
+
+std::wstring ganttDateFormat(const GanttOptions& g, const std::wstring& language) {
+    return !g.dateFormat.empty() ? g.dateFormat : language == L"en" ? L"M/d/yyyy" : L"dd.MM.yyyy";
 }
 
 std::vector<std::wstring> ganttCategories(const DataItem& item) {
@@ -348,7 +393,8 @@ std::wstring canonicalBarShape(const std::wstring& name) {
 std::wstring canonicalMarker(const std::wstring& name) {
     const std::wstring s = lower(trimmed(name));
     if (s == L"raute" || s == L"diamond") return L"diamond";
-    if (s == L"dreieck" || s == L"triangle") return L"triangle";
+    if (s == L"dreieck" || s == L"dreieck oben" || s == L"triangle") return L"triangle";
+    if (s == L"dreieck unten" || s == L"triangledown") return L"triangleDown";
     if (s == L"kreis" || s == L"circle") return L"circle";
     if (s == L"quadrat" || s == L"square") return L"square";
     if (s == L"stern" || s == L"star") return L"star";
@@ -479,8 +525,13 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
     const DesignSpec& spec = L.spec;
     L.th = textHeight(o.fontPt);
     const Emu th = L.th;
-    L.dateFormat = g.dateFormat.empty() ? L"dd.MM." : g.dateFormat;
+    L.dateFormat = ganttDateFormat(g, o.language);
     const GanttLook look = ganttLook(g);
+    auto rowStyle = [&](int r) -> const RowStyle* {
+        for (auto& s : g.rowStyles)
+            if (s.row == r) return &s;
+        return nullptr;
+    };
     L.barHeight = look.barHeight;
     const std::wstring& defaultBar = look.barShape;
     const std::wstring& defaultMarker = look.marker;
@@ -549,7 +600,7 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
 
     const Emu scaleH = th + th / 2;
     const Emu scalesH = scaleH * static_cast<Emu>(scales.size());
-    L.msRowH = th + th * 2 / 3;
+    L.msRowH = spec.milestoneDateBelow ? th * 2 + th / 4 : th + th * 2 / 3;  // ▲ und Datum darunter brauchen zwei Zeilen
     L.rowsTop = b.y + scalesH;
     // Beschriftungen der Schattierungen stehen in einer eigenen Zeile unter dem Diagramm
     const bool shadeCaptions = std::any_of(g.items.begin(), g.items.end(), [&](const GanttItem& it) {
@@ -615,7 +666,7 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
                                spec.text, std::format("item {} label", i)));
     }
 
-    // 2. Trennlinien an den Skaleneinheiten (grobe durchgezogen, feine gestrichelt)
+    // 2. Trennlinien an den Skaleneinheiten (grobe durchgezogen, feine gestrichelt bzw. gepunktet)
     std::vector<long long> taken;
     if (separators && rows > 0) {
         for (size_t k = 0; k < scales.size(); ++k) {
@@ -625,9 +676,9 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
             for (long long s = nextUnit(unitStart(t0, u, g.weekStart), u); static_cast<double>(s) < t1; s = nextUnit(s, u)) {
                 if (static_cast<double>(s) <= t0 || std::find(taken.begin(), taken.end(), s) != taken.end()) continue;
                 taken.push_back(s);
-                Prim p = line(L.x(static_cast<double>(s)), L.rowsTop, L.x(static_cast<double>(s)), L.rowsBottom, spec.grid, 0.5,
+                Prim p = line(L.x(static_cast<double>(s)), L.rowsTop, L.x(static_cast<double>(s)), L.rowsBottom, spec.grid, spec.fineDotted && k > 0 ? 0.75 : 0.5,
                               std::format("separator {} {}", unitKey(u), ++n));
-                p.dashed = k > 0;
+                (spec.fineDotted ? p.dotted : p.dashed) = k > 0;
                 d.prims.push_back(p);
             }
         }
@@ -650,19 +701,28 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
             ++n;
             const double from = std::max(static_cast<double>(s), t0), to = std::min(static_cast<double>(nextUnit(s, u)), t1);
             const Emu x0 = L.x(from), x1 = L.x(to);
-            if (static_cast<double>(s) > t0)
+            if (static_cast<double>(s) > t0 && spec.scaleTicks)
                 d.prims.push_back(line(x0, y + scaleH / 4, x0, y + scaleH, spec.scaleLine, 0.5, std::format("scale {} tick {}", unitKey(u), n)));
             if (fmt.empty()) continue;
             const std::wstring label = formatDate(static_cast<double>(s), fmt, o.language);
-            if (x1 - x0 < textWidth(label, o.fontPt) + th / 4) continue;  // angeschnittene Einheit am Rand
-            d.prims.push_back(text(x0, y, x1 - x0, scaleH, label, o.fontPt, Align::Center, spec.headerText, std::format("scale {} {}", unitKey(u), n)));
+            if (x1 - x0 < textWidth(label, o.fontPt) * (spec.scaleBold ? 11 : 10) / 10 + th / 4) continue;  // angeschnittene Einheit am Rand
+            // Standard: fett und linksbündig am Anfang der Einheit, sonst mittig
+            const Emu pad = spec.scaleAlign == Align::Left ? th / 10 : 0;
+            Prim p = text(x0 + pad, y, x1 - x0 - pad, scaleH, label, o.fontPt, spec.scaleAlign, spec.headerText, std::format("scale {} {}", unitKey(u), n));
+            p.bold = spec.scaleBold;
+            d.prims.push_back(p);
         }
+        // Linie unter jeder Skala; unter der feinsten (Oberkante der Zeilen) im Standard über die ganze Breite
         const bool last = k + 1 == scales.size();
-        d.prims.push_back(line(L.plot.x, y + scaleH, L.plot.x + L.plot.w, y + scaleH, last ? spec.rule : spec.scaleLine, last ? 0.75 : 0.5,
+        const Emu from = last && spec.frame ? b.x : L.plot.x;
+        d.prims.push_back(line(from, y + scaleH, L.plot.x + L.plot.w, y + scaleH, last ? spec.rule : spec.scaleLine, last ? 0.75 : 0.5,
                                std::format("scale {} rule", unitKey(u))));
     }
-    d.prims.push_back(line(L.plot.x, b.y, L.plot.x, L.rowsTop, spec.scaleLine, 0.5, "scale start"));
-    d.prims.push_back(line(L.plot.x + L.plot.w, b.y, L.plot.x + L.plot.w, L.rowsTop, spec.scaleLine, 0.5, "scale end"));
+    // Rahmen der Zeitachse links und rechts (Standard)
+    if (spec.frame && rows > 0) {
+        d.prims.push_back(line(L.plot.x, L.rowsTop, L.plot.x, L.rowsBottom, spec.rule, 0.5, "frame left"));
+        d.prims.push_back(line(L.plot.x + L.plot.w, L.rowsTop, L.plot.x + L.plot.w, L.rowsBottom, spec.rule, 0.5, "frame right"));
+    }
 
     // 4. Überschriften der Beschriftungsspalten (Höhe der feinsten Skala)
     if (g.headlines)
@@ -715,6 +775,7 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
     }
 
     // 6. Zeilen: erst alle Formen einer Zeile (Datenblatt und frei gesetzte), dann ihre Beschriftungen
+    std::vector<std::pair<std::string, Box>> milestoneBoxes;  // Meilensteine der Meilensteinzeile (für Meilensteinlinien)
     auto rowContent = [&](int r) {
         Emu y, h;
         L.band(r, y, h);
@@ -747,9 +808,10 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
             const Cell& sc = at(item, r, kStartCol);
             const auto s = cellDate(sc), e = cellDate(at(item, r, kEndCol));
             const std::wstring shapeName = canonicalBarShape(textAt(item, r, kShapeCol));
+            const RowStyle* rs = rowStyle(r);
             if (s && e && *e > *s)
                 if (const auto box = L.bar(std::format("bar r{}", r), r, *s, *e, shapeName.empty() ? defaultBar.c_str() : shapeName.c_str(), L"",
-                                           sc.fill ? Color::rgbColor(*sc.fill) : rowColor.value_or(spec.bar), g.barLabels))
+                                           sc.fill ? Color::rgbColor(*sc.fill) : rowColor.value_or(spec.bar), g.barLabels, rs ? rs->bar : ShapeStyle{}))
                     L.barBoxes[r] = *box;
         }
         // Frei gesetzte Balken, Fünfecke, Chevrons
@@ -764,23 +826,28 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
             if (!s || !e || *e <= *s) continue;
             const wchar_t* shapeName = it.kind == GanttItem::Kind::Pentagon ? L"pentagon" : it.kind == GanttItem::Kind::Chevron ? L"chevron" : defaultBar.c_str();
             L.bar(std::format("item {}", i), r, *s, *e, shapeName, it.kind == GanttItem::Kind::Bar ? L"" : it.text,
-                  it.fill ? Color::rgbColor(*it.fill) : rowColor.value_or(spec.bar), it.kind == GanttItem::Kind::Bar ? g.barLabels : BarLabel::None);
+                  it.fill ? Color::rgbColor(*it.fill) : rowColor.value_or(spec.bar), it.kind == GanttItem::Kind::Bar ? g.barLabels : BarLabel::None,
+                  it.style);
         }
         // Meilensteine (Datenblatt, dann frei gesetzte)
         const Cell& mc = at(item, r, kMilestoneCol);
         if (const auto m = cellDate(mc)) {
             const std::wstring marker = canonicalMarker(textAt(item, r, kMarkerCol));
-            L.milestone(std::format("milestone r{}", r), std::format("milestone label r{}", r), r, *m,
-                        mc.fill ? Color::rgbColor(*mc.fill) : markColor.value_or(spec.milestone), marker.empty() ? defaultMarker : marker,
-                        g.milestoneLabels ? formatDate(*m, L.dateFormat, o.language) : L"");
+            const RowStyle* rs = rowStyle(r);
+            const auto box = L.milestone(std::format("milestone r{}", r), std::format("milestone label r{}", r), r, *m,
+                                         mc.fill ? Color::rgbColor(*mc.fill) : markColor.value_or(spec.milestone), marker.empty() ? defaultMarker : marker,
+                                         g.milestoneLabels ? formatDate(*m, L.dateFormat, o.language) : L"", rs ? rs->milestone : ShapeStyle{});
+            if (box && r == kMilestoneRow) milestoneBoxes.push_back({std::format("milestone line r{}", r), *box});
         }
         for (size_t i = 0; i < g.items.size(); ++i) {
             const GanttItem& it = g.items[i];
             if (it.row != r || it.kind != GanttItem::Kind::Milestone) continue;
             if (const auto s = parseIsoDate(it.start)) {
                 const std::string role = std::format("item {}", i);
-                L.milestone(role, role + " label", r, *s, it.fill ? Color::rgbColor(*it.fill) : markColor.value_or(spec.milestone), defaultMarker,
-                            it.text.empty() ? (g.milestoneLabels ? formatDate(*s, L.dateFormat, o.language) : L"") : it.text);
+                const auto box = L.milestone(role, role + " label", r, *s, it.fill ? Color::rgbColor(*it.fill) : markColor.value_or(spec.milestone),
+                                             defaultMarker, it.text.empty() ? (g.milestoneLabels ? formatDate(*s, L.dateFormat, o.language) : L"") : it.text,
+                                             it.style);
+                if (box && r == kMilestoneRow) milestoneBoxes.push_back({role + " line", *box});
             }
         }
         L.placeLabels();
@@ -846,16 +913,18 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
     }
 
     // 8. Meilensteinzeile unter dem Diagramm (nimmt auch Meilensteine und Klammern auf)
-    d.prims.push_back(line(L.plot.x, L.msTop, L.plot.x + L.plot.w, L.msTop, spec.rule, 0.75, "milestone row rule"));
+    d.prims.push_back(line(spec.frame ? b.x : L.plot.x, L.msTop, L.plot.x + L.plot.w, L.msTop, spec.rule, 0.75, "milestone row rule"));
     if (const std::wstring caption = textAt(item, kMilestoneRow, kLabelCol); !caption.empty())
-        d.prims.push_back(text(activity.x + th / 4, L.msTop, activity.w - th / 4, L.msRowH, caption, o.fontPt, Align::Left, spec.text, "activity r1"));
-    if (const auto m = cellDate(at(item, kMilestoneRow, kMilestoneCol)); m && g.milestoneLines && *m >= t0 && *m < t1 && rows > 0) {
-        const Emu mx = L.x(a.dayScale ? std::floor(*m) + 0.5 : std::floor(*m));
-        Prim p = line(mx, L.rowsTop, mx, L.msTop, spec.milestone, 0.75, "milestone line r1");
-        p.dashed = true;
-        d.prims.push_back(p);
-    }
+        d.prims.push_back(text(activity.x + th / 4, L.msTop, activity.w - th / 4, spec.milestoneDateBelow ? th : L.msRowH, caption, o.fontPt, Align::Left,
+                               spec.text, "activity r1"));
     rowContent(kMilestoneRow);
+    // Meilensteinlinien: gestrichelt vom Meilenstein der Meilensteinzeile bis zur Oberkante der Zeilen (wie im Original)
+    if (look.milestoneLines && rows > 0)
+        for (auto& [role, box] : milestoneBoxes) {
+            Prim p = line(box.x + box.w / 2, L.rowsTop, box.x + box.w / 2, box.y, spec.milestone, 1.25, role);
+            p.dashed = true;
+            d.prims.push_back(p);
+        }
 
     for (size_t i = 0; i < g.items.size(); ++i) {
         const int r = g.items[i].row;
