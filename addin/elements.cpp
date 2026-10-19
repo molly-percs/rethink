@@ -427,8 +427,10 @@ void storeGanttGeometry(IDispatch* group, const Drawing& d) {
             if (rows++ == 0) rowsTop = pt(r.y);
             rowH = pt(r.h);
         }
-    const std::wstring value = std::format(L"{};{};{};{};{};{};{};{}", pt(d.axis.x0), pt(d.axis.x0 + d.axis.w), pt(d.scaleTop), pt(d.scaleBottom),
-                                           rowsTop, rowH, rows, pt(d.bounds.x));
+    std::wstring value = std::format(L"{};{};{};{};{};{};{};{}", pt(d.axis.x0), pt(d.axis.x0 + d.axis.w), pt(d.scaleTop), pt(d.scaleBottom),
+                                     rowsTop, rowH, rows, pt(d.bounds.x));
+    value += std::format(L";{}", d.columns.size());  // Spalten: Anzahl, dann je Spalte Index;Rand;Breite
+    for (auto& c : d.columns) value += std::format(L";{};{};{}", c.col, pt(c.x), pt(c.w));
     if (tagValue(group, kGanttTag) != value) setTag(group, kGanttTag, value);
 }
 
@@ -1442,6 +1444,7 @@ GanttGeometry geometryOfDrawing(const Drawing& d) {
             g.rowH = pt(r.h);
         }
     g.labelsLeft = pt(d.bounds.x);
+    for (auto& c : d.columns) g.columns.push_back({c.col, pt(c.x), pt(c.w)});
     return g;
 }
 
@@ -1510,8 +1513,27 @@ GanttGeometry ganttGeometryOf(IDispatch* element) {
         g.plotLeft = plotLeft + dx, g.plotRight = plotRight + dx, g.scaleTop = scaleTop + dy, g.scaleBottom = scaleBottom + dy;
         g.rowsTop = rowsTop + dy, g.rowH = rowH, g.rowCount = rows, g.labelsLeft = left + dx;
         g.valid = true;
+        size_t columns = 0;  // Spalten (fehlen in älteren Tags)
+        if (in >> sep >> columns)
+            for (size_t i = 0; i < columns; ++i) {
+                GanttColumn c;
+                if (!(in >> sep >> c.col >> sep >> c.left >> sep >> c.width)) break;
+                c.left += dx;
+                g.columns.push_back(c);
+            }
     }
     return g;
+}
+
+std::vector<std::wstring> ganttRowCategories(IDispatch* element) {
+    const std::wstring stored = tagValue(element, kModelTag);
+    const DataItem item = onWorker([&] { return parseDataItemJson(stored); });
+    std::vector<std::wstring> result;
+    for (size_t r = gantt::kFirstActivityRow; r < item.table.size(); ++r) {
+        const Row& row = item.table[r];
+        result.push_back(static_cast<size_t>(gantt::kCategoryCol) < row.size() && row[gantt::kCategoryCol].kind == CellKind::String ? row[gantt::kCategoryCol].text : L"");
+    }
+    return result;
 }
 
 std::wstring beginGanttDrag(IDispatch* app, const std::string& role, int grip, double pointsPerPixel) {

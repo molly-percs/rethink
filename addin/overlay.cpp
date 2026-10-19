@@ -21,6 +21,7 @@ OverlayContent g_content;
 POINT g_origin{};  // Bildschirmposition der linken oberen Fensterecke
 bool g_displaced = false;
 OverlayCallback g_callback = nullptr;
+int g_hover = -1;  // Griff unter der Maus (Index in g_content.handles), -1 = keiner
 
 // Gedrückter Griff. Kopie statt Index: während des Ziehens baut der Rückruf das Overlay laufend neu auf.
 struct Press {
@@ -53,8 +54,48 @@ POINT messagePos() {
     return {static_cast<short>(LOWORD(pos)), static_cast<short>(HIWORD(pos))};
 }
 
+bool sameHandle(const OverlayHandle& a, const OverlayHandle& b) {
+    return a.action == b.action && a.row == b.row && a.column == b.column && a.role == b.role;
+}
+
+// Griff unter der Maus: beim Drücken der gedrückte, sonst der unter dem Zeiger (nur wenn das Overlay dort oben liegt)
+int hoverTarget() {
+    if (g_press.active) {
+        for (size_t i = 0; i < g_content.handles.size(); ++i)
+            if (sameHandle(g_content.handles[i], g_press.handle)) return static_cast<int>(i);
+        return -1;
+    }
+    POINT p{};
+    GetCursorPos(&p);
+    return g_window && WindowFromPoint(p) == g_window ? hitHandle(p) : -1;
+}
+
+LPCWSTR cursorOf(const OverlayHandle& h) {
+    switch (h.action) {
+        case OverlayAction::RowMove:
+        case OverlayAction::GanttMove: return IDC_SIZEALL;
+        case OverlayAction::GanttStart:
+        case OverlayAction::GanttEnd:
+        case OverlayAction::RangeStart:
+        case OverlayAction::RangeEnd: return IDC_SIZEWE;
+        case OverlayAction::CellEdit: return IDC_IBEAM;
+        case OverlayAction::Datasheet: return IDC_HAND;
+        default: return h.dirX != 0 ? IDC_SIZEWE : IDC_SIZENS;
+    }
+}
+
 void post(HWND hwnd, OverlayGesture gesture, int pixels) {
     PostMessageW(hwnd, kMsgAction, static_cast<WPARAM>(gesture), static_cast<LPARAM>(pixels));
+}
+
+void render(bool move);
+
+// Maus über einem anderen Griff (oder keinem): neu zeichnen
+void updateHover() {
+    const int hover = hoverTarget();
+    if (hover == g_hover) return;
+    g_hover = hover;
+    if (g_window && IsWindowVisible(g_window)) render(false);
 }
 
 // Drücken beenden; ein laufendes Ziehen endet mit `gesture` (DragEnd oder DragCancel).
@@ -76,12 +117,11 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
         case WM_SETCURSOR: {
-            const int index = hitHandle(messagePos());
-            if (index < 0 || g_content.handles[index].style == HandleStyle::Datasheet) {
-                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+            if (g_press.active) {
+                SetCursor(LoadCursorW(nullptr, cursorOf(g_press.handle)));
             } else {
-                const OverlayHandle& h = g_content.handles[index];
-                SetCursor(LoadCursorW(nullptr, h.dirX != 0 ? IDC_SIZEWE : IDC_SIZENS));
+                const int index = hitHandle(messagePos());
+                SetCursor(LoadCursorW(nullptr, index < 0 ? IDC_HAND : cursorOf(g_content.handles[index])));
             }
             return TRUE;
         }
@@ -103,7 +143,12 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
         case WM_MOUSEMOVE: {
-            if (!g_press.active) return 0;
+            if (!g_press.active) {
+                updateHover();
+                TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, hwnd, 0};
+                TrackMouseEvent(&track);
+                return 0;
+            }
             if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
                 release(hwnd, OverlayGesture::DragCancel);
                 return 0;
@@ -114,13 +159,16 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (!g_press.dragging && std::abs(pixels) < GetSystemMetrics(h.dirX != 0 ? SM_CXDRAG : SM_CYDRAG)) return 0;
             g_press.dragging = true;
             g_press.pixels = pixels;
-            SetCursor(LoadCursorW(nullptr, h.dirX != 0 ? IDC_SIZEWE : IDC_SIZENS));
+            SetCursor(LoadCursorW(nullptr, cursorOf(h)));
             if (!g_press.posted) {
                 g_press.posted = true;
                 post(hwnd, OverlayGesture::Drag, pixels);
             }
             return 0;
         }
+        case WM_MOUSELEAVE:
+            if (!g_press.active) updateHover();
+            return 0;
         case WM_LBUTTONUP: release(hwnd, OverlayGesture::DragEnd); return 0;
         case WM_CAPTURECHANGED: release(hwnd, OverlayGesture::DragCancel); return 0;
         case kMsgAction: {
@@ -137,6 +185,7 @@ LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (gesture == OverlayGesture::DragEnd || gesture == OverlayGesture::DragCancel) g_press.posted = false;
                 g_callback(handle, gesture, gesture == OverlayGesture::Click ? 0 : pixels, shift);
             }
+            if (!g_press.active) updateHover();  // nach dem Loslassen: die Maus liegt evtl. woanders
             return 0;
         }
     }
@@ -161,14 +210,31 @@ HWND ensureWindow(HWND owner) {
     return g_window;
 }
 
-}  // namespace
+// Sechs Punkte „⋮⋮“ (zwei Spalten, drei Reihen) mittig im Rechteck
+void drawDots(Canvas& canvas, const RECT& r, int dot, double alpha) {
+    const int gap = dot, w = 2 * dot + gap, h = 3 * dot + 2 * gap;
+    const int x0 = (r.left + r.right - w) / 2, y0 = (r.top + r.bottom - h) / 2;
+    for (int i = 0; i < 2; ++i)
+        for (int j = 0; j < 3; ++j) {
+            const int x = x0 + i * (dot + gap), y = y0 + j * (dot + gap);
+            canvas.fill({x, y, x + dot, y + dot}, kBlue, alpha);
+        }
+}
 
-void showOverlay(HWND owner, const OverlayContent& content, OverlayCallback callback) {
-    HWND hwnd = ensureWindow(owner);
+// Rechteck mit 1 Pixel breitem Rand (Fensterkoordinaten)
+void frame(Canvas& canvas, const RECT& r, double alpha) {
+    canvas.fill({r.left, r.top, r.right, r.top + 1}, kBlue, alpha);
+    canvas.fill({r.left, r.bottom - 1, r.right, r.bottom}, kBlue, alpha);
+    canvas.fill({r.left, r.top, r.left + 1, r.bottom}, kBlue, alpha);
+    canvas.fill({r.right - 1, r.top, r.right, r.bottom}, kBlue, alpha);
+}
+
+// Zeichnet g_content in das Ebenenfenster. move = Fenster an g_origin setzen (sonst Lage belassen, z. B. beim Überfahren).
+void render(bool move) {
+    HWND hwnd = g_window;
     if (!hwnd) return;
-    g_content = content;
-    g_callback = callback;
-    g_displaced = false;
+    HWND owner = GetWindow(hwnd, GW_OWNER);
+    const OverlayContent& content = g_content;
 
     const int m = margin(owner), glow = scaled(owner, 9);
     const RECT& e = content.element;
@@ -229,6 +295,21 @@ void showOverlay(HWND owner, const OverlayContent& content, OverlayCallback call
         canvas.fill({r.left, r.bottom - 1, r.right, r.bottom}, kBlue, 0.9);
     }
 
+    // Maus über einer Zeile (Griff oder Zelle): sehr heller Streifen über ihrem Beschriftungsbereich, eine Zelle leuchtet mit Rahmen
+    const OverlayHandle* hot = g_hover >= 0 && g_hover < static_cast<int>(content.handles.size()) ? &content.handles[g_hover] : nullptr;
+    const bool hotRow = hot && (hot->action == OverlayAction::RowMove || hot->action == OverlayAction::CellEdit);
+    if (hotRow) {
+        RECT area = hot->area;
+        OffsetRect(&area, -g_origin.x, -g_origin.y);
+        canvas.fill(area, kBlue, 0.07);
+        if (hot->action == OverlayAction::CellEdit) {
+            RECT r = hot->rect;
+            OffsetRect(&r, -g_origin.x, -g_origin.y);
+            canvas.fill(r, kBlue, 0.16);
+            frame(canvas, r, 0.9);
+        }
+    }
+
     // Griffe und Datenblatt-Symbol (Fensterkoordinaten)
     for (auto& h : content.handles) {
         RECT r = h.rect;
@@ -255,6 +336,12 @@ void showOverlay(HWND owner, const OverlayContent& content, OverlayCallback call
             }
             case HandleStyle::Grip: canvas.grip(r); break;
             case HandleStyle::Hidden: canvas.fill(r, kBlue, 0.004); break;  // fast unsichtbar, aber für das Fenster vorhanden
+            case HandleStyle::RowGrip: {
+                const bool lit = hotRow && hot->row == h.row;
+                canvas.fill(r, kBlue, lit ? 0.14 : 0.004);  // auch unscheinbar „da“, damit das Fenster die Maus bekommt
+                drawDots(canvas, r, std::max(2, scaled(owner, 2)), lit ? 1.0 : 0.4);
+                break;
+            }
         }
     }
 
@@ -290,13 +377,31 @@ void showOverlay(HWND owner, const OverlayContent& content, OverlayCallback call
     POINT position = g_origin, source{0, 0};
     SIZE size{width, height};
     BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-    UpdateLayeredWindow(hwnd, screen, &position, &size, dc, &source, 0, &blend, ULW_ALPHA);
-    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    UpdateLayeredWindow(hwnd, screen, move ? &position : nullptr, &size, dc, &source, 0, &blend, ULW_ALPHA);
+    if (move) ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 
     SelectObject(dc, previous);
     DeleteObject(bitmap);
     DeleteDC(dc);
     ReleaseDC(nullptr, screen);
+}
+
+}  // namespace
+
+void showOverlay(HWND owner, const OverlayContent& content, OverlayCallback callback) {
+    HWND hwnd = ensureWindow(owner);
+    if (!hwnd) return;
+    g_content = content;
+    g_callback = callback;
+    g_displaced = false;
+    g_hover = -1;
+    render(true);
+    g_hover = hoverTarget();  // die Maus liegt nach dem Neuaufbau evtl. schon über einem Griff
+    if (g_hover >= 0) render(false);
+}
+
+void overlayHoverCheck() {
+    if (g_window && IsWindowVisible(g_window) && !g_press.active) updateHover();
 }
 
 void hideOverlay() {
@@ -305,6 +410,7 @@ void hideOverlay() {
         ShowWindow(g_window, SW_HIDE);
     }
     g_content = {};
+    g_hover = -1;
 }
 
 bool overlayVisible() { return g_window && IsWindowVisible(g_window); }

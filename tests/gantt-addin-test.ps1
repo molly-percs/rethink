@@ -56,6 +56,10 @@ try {
     Expect ($info -match '\[verschieben milestone r3 ') 'Meilenstein verschiebbar'
     Expect ($info -match '\[bereich-anfang range ' -and $info -match '\[bereich-ende range ') 'Pfeile an beiden Skalenenden'
     Expect ($info -match '\[datenblatt ') 'Datenblatt-Symbol'
+    Expect ($info -match '\[zeile activity r2 ' -and $info -match '\[zeile activity r3 ' -and $info -match '\[zeile activity r4 ') 'Zeilengriff „⋮⋮“ je Aktivitätszeile'
+    Expect ($info -match '\[zelle r2 c0 ' -and $info -match '\[zelle r3 c0 ') 'Zellen zum Bearbeiten je Zeile und Beschriftungsspalte'
+    $el = [regex]::Match($info, 'element=(-?\d+),(-?\d+),(-?\d+),(-?\d+)'); $gr = [regex]::Match($info, '\[zeile activity r2 (-?\d+),(-?\d+),(-?\d+),(-?\d+)\]')
+    Expect ([int]$gr.Groups[3].Value -lt [int]$el.Groups[1].Value) 'Zeilengriff liegt links neben dem Diagramm (nicht auf PowerPoints Anfassern)'
 
     # Maßstab für Erwartungen: Folienpunkte je Bildschirmpixel und je Tag
     $win = $pp.ActiveWindow
@@ -232,7 +236,8 @@ try {
     # Zeile im Diagramm zwei Zeilen nach unten ziehen: landet in „Planung“, Datenblatt folgt
     $rowPx = [int][math]::Round(($g.GroupItems.Item('activity r3').Top - $g.GroupItems.Item('activity r2').Top) / $ptPerPx)
     $g.Select()
-    [void]$api.GanttDrag('row r2', 2, "$([int]($rowPx / 2));$(2 * $rowPx)", $false)
+    $tips = $api.GanttDrag('row r2', 2, "$([int]($rowPx / 2));$(2 * $rowPx)", $false)
+    Expect ($tips -match 'Zeile verschieben' -and $tips -match '→ nach Planung') "Kurzinfo beim Ziehen einer Zeile: Ziel-Kategorie ($tips)"
     $g = $slide.Shapes.Item($name)
     Expect ($g.GroupItems.Item('activity r4').TextFrame.TextRange.Text -eq 'Konzept') 'Zeile per Ziehen verschoben'
     Expect ($api.DatasheetCell(4, 0) -eq 'Konzept' -and $api.DatasheetCell(4, 6) -eq 'Planung') "Zeile übernimmt die Kategorie der Ablagestelle ($($api.DatasheetCell(4, 6)))"

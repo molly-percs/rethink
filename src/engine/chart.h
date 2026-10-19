@@ -92,6 +92,12 @@ struct RowBand {
     Emu y = 0, h = 0;
 };
 
+// Zeitplan: Beschriftungsspalte (Index in "table", linker Rand und Breite) – für die Zellen zum Bearbeiten im Add-in.
+struct ColumnBand {
+    int col = 0;
+    Emu x = 0, w = 0;
+};
+
 struct Drawing {
     Box bounds;
     std::vector<Prim> prims;
@@ -99,6 +105,7 @@ struct Drawing {
     Orientation valueDirection = Orientation::Up;  // Säulendiagramme: Richtung wachsender Werte (für ▲▼-Griffe)
     GanttAxis axis;                                // Zeitplan: Zeitachse (für Ziehen in Tagen)
     std::vector<RowBand> rows;                     // Zeitplan: Zeilen
+    std::vector<ColumnBand> columns;               // Zeitplan: gezeigte Beschriftungsspalten
     Emu scaleTop = 0, scaleBottom = 0;             // Zeitplan: Band der Kalenderskalen
     std::vector<TimeUnit> scales;                  // Zeitplan: gezeigte Skalen (grob → fein)
 };

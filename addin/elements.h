@@ -87,14 +87,21 @@ struct GanttShape {
     std::string role, flags;  // flags: "bar", "milestone", "bracket", "shade"
     double left = 0, top = 0, width = 0, height = 0;
 };
+struct GanttColumn {
+    int col = 0;  // Spalte in "table"
+    double left = 0, width = 0;
+};
 struct GanttGeometry {
     bool valid = false;
     std::vector<GanttShape> shapes;
+    std::vector<GanttColumn> columns;  // gezeigte Beschriftungsspalten (Zellen zum Bearbeiten)
     double plotLeft = 0, plotRight = 0, scaleTop = 0, scaleBottom = 0;
     double rowsTop = 0, rowH = 0, labelsLeft = 0;  // Aktivitätszeilen (Zeile 2 ab rowsTop) und linker Rand der Beschriftungen
     int rowCount = 0;
 };
 GanttGeometry ganttGeometryOf(IDispatch* element);
+// Kategorie je Aktivitätszeile (Index 0 = "table"-Zeile 2; leer ohne Kategorie) aus dem gespeicherten Modell.
+std::vector<std::wstring> ganttRowCategories(IDispatch* element);
 
 // Ziehen am ausgewählten Zeitplan. grip: 0 = Anfang, 1 = Ende, 2 = verschieben; role "range" = sichtbarer Bereich
 // (grip 0/1). pointsPerPixel: Folienpunkte je Bildschirmpixel (Rasterung: nicht feiner als ~3 Pixel).

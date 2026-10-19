@@ -20,7 +20,8 @@ enum class OverlayAction {
     GanttMove,      // … ganzes Element verschieben (Klick wählt die Form aus)
     RangeStart,     // Anfang des sichtbaren Bereichs (Pfeil am linken Skalenende)
     RangeEnd,       // Ende des sichtbaren Bereichs
-    RowMove,        // Zeitplan: Zeile an ihrer Beschriftung nach oben/unten ziehen (auch in eine andere Kategorie)
+    RowMove,        // Zeitplan: Zeile am Griff links neben den Beschriftungen nach oben/unten ziehen (auch in eine andere Kategorie)
+    CellEdit,       // Zeitplan: Zelle einer Beschriftungsspalte (Klick = dort tippen)
 };
 
 enum class HandleStyle {
@@ -30,6 +31,7 @@ enum class HandleStyle {
     Arrow,      // Pfeil am Skalenende
     DoubleArrow,// ◀▶ am Ende des blauen Skalenbands (Skala ausgewählt oder Bereich wird gezogen)
     Datasheet,  // Tabellensymbol
+    RowGrip,    // Zeilengriff „⋮⋮“ (blass, bei Maus über der Zeile kräftig)
 };
 
 struct OverlayHandle {
@@ -40,6 +42,7 @@ struct OverlayHandle {
     HandleStyle style = HandleStyle::Triangle;
     int dirX = 0, dirY = -1;  // Bildschirmrichtung, in der der Mausweg positiv zählt
     int pointing = 0;         // Dreieck/Pfeil: 0 = oben, 1 = unten, 2 = links, 3 = rechts
+    RECT area{};              // Zeile/Zelle: Beschriftungsbereich der Zeile (heller Streifen bei Maus darüber)
 };
 
 struct OverlayContent {
@@ -62,6 +65,8 @@ using OverlayCallback = void (*)(const OverlayHandle& handle, OverlayGesture ges
 void showOverlay(HWND owner, const OverlayContent& content, OverlayCallback callback);
 void hideOverlay();
 bool overlayVisible();
+// Prüft, ob die Maus noch über demselben Griff liegt (Maus-Hook meldet Bewegungen außerhalb des Overlays) und zeichnet bei Änderung neu.
+void overlayHoverCheck();
 // Fensterrechteck des Overlays (für Tests).
 RECT overlayRect();
 HWND overlayWindow();

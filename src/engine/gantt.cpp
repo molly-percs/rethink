@@ -575,6 +575,7 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
         c.w = g.headlines ? textWidth(c.head, o.fontPt) : 0;
         for (size_t r = kMilestoneRow; r < item.table.size(); ++r) c.w = std::max(c.w, textWidth(textAt(item, r, c.col), o.fontPt) * (c.col == kCategoryCol ? 11 : 10) / 10);
         c.w = std::max(c.w + th / 2 + (c.col == kCategoryCol ? th / 2 : 0), th * 2);
+        if (c.col != kLabelCol && !hasText(c.col)) c.w = std::max(c.w, th * 6);  // leere, eingeschaltete Spalte: Platz zum Eintippen
         labelsW += c.w;
     }
     if (labelsW > b.w / 2) {  // höchstens die halbe Breite
@@ -938,6 +939,7 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
 
     for (int r = kFirstActivityRow; r < static_cast<int>(item.table.size()); ++r) d.rows.push_back({r, L.rowsTop + (r - kFirstActivityRow) * L.rowH, L.rowH});
     d.rows.push_back({kMilestoneRow, L.msTop, L.msRowH});
+    for (auto& c : columns) d.columns.push_back({c.col, c.x, c.w});
     d.scaleTop = b.y, d.scaleBottom = L.rowsTop;
     d.scales = scales;
     d.axis = a;

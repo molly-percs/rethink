@@ -52,6 +52,7 @@ struct Drag {
     int decimals = 0;
     double pointsPerPixel = 1;  // Zeitplan: Folienpunkte je Bildschirmpixel
     int row = 0, target = 0;    // Zeile ziehen: Ausgangs- und Zielzeile
+    std::vector<std::wstring> categories;  // Zeile ziehen: Kategorie je Aktivitätszeile (Index 0 = Zeile 2)
     bool range = false;         // Zeitplan: ein Skalenende wird gezogen
     std::wstring error;         // erst nach dem Loslassen melden: während des Ziehens hält das Overlay die Maus
 };
@@ -213,15 +214,28 @@ void addGanttHandles(OverlayContent& c, const Mapping& m) {
         if (s.flags != "shade" && r.right - r.left > grip * 3)
             handle({r.left + grip / 2 + 2, r.top, r.right - grip / 2 - 2, r.bottom}, OverlayAction::GanttMove, s.role, HandleStyle::Hidden);
     }
-    // Zeilen: unsichtbare Fläche über den Beschriftungen zum Ziehen nach oben/unten
+    // Zeilen: Griff „⋮⋮“ links neben den Beschriftungen zum Ziehen nach oben/unten (auch in eine andere Kategorie) und je
+    // Beschriftungsspalte eine Zelle zum Bearbeiten. Beide wählen keine Form innerhalb der Gruppe aus.
     for (int i = 0; g_gantt.valid && i < g_gantt.rowCount; ++i) {
         const double top = g_gantt.rowsTop + i * g_gantt.rowH;
-        OverlayHandle h;
-        h.rect = {m.x(g_gantt.labelsLeft), m.y(top) + 1, m.x(g_gantt.plotLeft) - scaled(3), m.y(top + g_gantt.rowH) - 1};
-        h.action = OverlayAction::RowMove, h.style = HandleStyle::Hidden, h.dirX = 0, h.dirY = 1;
-        h.row = engine::gantt::kFirstActivityRow + i;
-        h.role = std::format("activity r{}", h.row);
-        if (h.rect.right > h.rect.left && !hitsGrip(h.rect, c.element)) c.handles.push_back(h);
+        const int row = engine::gantt::kFirstActivityRow + i;
+        const long y0 = m.y(top) + 1, y1 = m.y(top + g_gantt.rowH) - 1, labelsL = m.x(g_gantt.labelsLeft), plotL = m.x(g_gantt.plotLeft);
+        const RECT area{labelsL, y0, plotL - scaled(3), y1};
+        OverlayHandle rowGrip;
+        const long gx = std::min<long>(labelsL, c.element.left);  // außerhalb von PowerPoints Anfassern am Rand
+        rowGrip.rect = {gx - scaled(26), y0, gx - scaled(12), y1};
+        rowGrip.action = OverlayAction::RowMove, rowGrip.style = HandleStyle::RowGrip, rowGrip.dirX = 0, rowGrip.dirY = 1, rowGrip.area = area;
+        rowGrip.row = row;
+        rowGrip.role = std::format("activity r{}", row);
+        if (!hitsGrip(rowGrip.rect, c.element)) c.handles.push_back(rowGrip);
+        for (auto& col : g_gantt.columns) {
+            OverlayHandle cell;
+            cell.rect = {m.x(col.left), y0, m.x(col.left + col.width), y1};
+            if (hitsGrip(cell.rect, c.element)) cell.rect.left = std::min(cell.rect.left + scaled(8), cell.rect.right);
+            cell.action = OverlayAction::CellEdit, cell.style = HandleStyle::Hidden, cell.dirX = 0, cell.dirY = 0, cell.area = area;
+            cell.row = row, cell.column = col.col;
+            if (cell.rect.right - cell.rect.left > scaled(4) && !hitsGrip(cell.rect, c.element)) c.handles.push_back(cell);
+        }
     }
     if (g_gantt.valid && (g_scaleSelected || (g_dragging && g_drag.range))) {
         // Skala ausgewählt oder Bereich wird gezogen: blaues Band über der Skala, ◀▶ an beiden Enden
@@ -378,6 +392,8 @@ void beginDrag(const OverlayHandle& handle) {
         g_drag.pointsPerPixel = 1.0 / std::max(std::fabs(m.ay), 1e-6);
         g_drag.row = g_drag.target = handle.row;
         g_drag.active = g_gantt.valid && g_gantt.rowH > 0;
+        if (g_drag.active && g_element) g_drag.categories = ganttRowCategories(g_element.Get());
+        g_tooltip = L"Zeile verschieben";
         return;
     }
     if (isGanttAction(handle.action)) {
@@ -409,7 +425,13 @@ void dragStep(OverlayGesture gesture, int pixels) {
         const int slot = std::clamp(static_cast<int>(std::floor((centre - g_gantt.rowsTop) / g_gantt.rowH)), 0, g_gantt.rowCount - 1);
         g_drag.target = first + slot;
         g_marker = {};
+        g_tooltip = L"Zeile verschieben";
         if (g_drag.target != g_drag.row) {
+            // Andere Kategorie an der Ablagestelle: die Zeile übernimmt sie (moveGanttRowTo)
+            auto category = [&](int r) { return r - first >= 0 && r - first < static_cast<int>(g_drag.categories.size()) ? g_drag.categories[r - first] : std::wstring(); };
+            const bool any = std::any_of(g_drag.categories.begin(), g_drag.categories.end(), [](const std::wstring& c) { return !c.empty(); });
+            if (any && category(g_drag.target) != category(g_drag.row))
+                g_tooltip = category(g_drag.target).empty() ? L"→ ohne Kategorie" : L"→ nach " + category(g_drag.target);
             const Mapping m = currentMapping();
             const int y = m.y(g_gantt.rowsTop + (slot + (g_drag.target > g_drag.row ? 1 : 0)) * g_gantt.rowH);
             g_marker = {m.x(g_gantt.labelsLeft), y - 1, m.x(g_gantt.plotRight), y + 2};
@@ -514,18 +536,11 @@ void onOverlayAction(const OverlayHandle& handle, OverlayGesture gesture, int pi
                 adjustSegment(g_app.Get(), handle.row, handle.column, handle.action == OverlayAction::Up ? 1 : -1, shift);
                 if (g_element) placeOverlay(true);
                 break;
-            case OverlayAction::RowMove:
-                // Klick auf eine Zeilenbeschriftung wählt sie aus (fehlt die Spalte, passiert nichts)
-                try {
-                    if (g_element) selectInnerShape(g_element.Get(), handle.role);
-                } catch (...) {
-                }
-                break;
             case OverlayAction::GanttMove:
                 // Klick auf einen Balken/Meilenstein wählt ihn aus (wie PowerPoints zweiter Klick in eine Gruppe)
                 if (g_element) selectInnerShape(g_element.Get(), handle.role);
                 break;
-            default: break;  // Klick ohne Ziehen an Griffen und Skalenpfeilen: nichts
+            default: break;  // Klick ohne Ziehen an Griffen, Skalenpfeilen, Zeilengriffen und Zellen: nichts
         }
     } catch (const std::exception& e) {
         MessageBoxW(powerPointWindow(), widen(e.what()).c_str(), L"rethink", MB_ICONINFORMATION);
@@ -663,6 +678,7 @@ bool rightClick(WPARAM message, const MOUSEHOOKSTRUCT* info) {
 LRESULT CALLBACK onMouse(int code, WPARAM message, LPARAM lParam) {
     if (code >= 0 && (message == WM_RBUTTONDOWN || message == WM_RBUTTONUP) && rightClick(message, reinterpret_cast<const MOUSEHOOKSTRUCT*>(lParam)))
         return 1;
+    if (code >= 0 && message == WM_MOUSEMOVE && g_element && overlayVisible()) overlayHoverCheck();  // Maus hat das Overlay verlassen
     if (code >= 0 && g_element && !g_dragging && !g_acting) {
         const auto* info = reinterpret_cast<const MOUSEHOOKSTRUCT*>(lParam);
         if (info->hwnd != overlayWindow() && info->hwnd != ganttToolbarWindow() && info->hwnd != radialMenuWindow()) {
@@ -816,6 +832,7 @@ const wchar_t* actionName(OverlayAction a) {
         case OverlayAction::GanttEnd: return L"ende";
         case OverlayAction::GanttMove: return L"verschieben";
         case OverlayAction::RowMove: return L"zeile";
+        case OverlayAction::CellEdit: return L"zelle";
         case OverlayAction::RangeStart: return L"bereich-anfang";
         case OverlayAction::RangeEnd: return L"bereich-ende";
     }

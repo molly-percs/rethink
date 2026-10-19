@@ -340,6 +340,16 @@ void testGanttLayout() {
           "Gantt: Spaltenüberschriften fett; Spalte „Verantwortlich“, weil es einen Eintrag gibt");
     check(!find(d, "headline remark"), "Gantt: leere Spalte „Bemerkung“ ist ausgeblendet");
     check(find(d, "responsible r4") && find(d, "responsible r4")->text == L"Team B", "Gantt: Verantwortlich-Eintrag");
+    check(d.columns.size() == 2 && d.columns[0].col == gantt::kLabelCol && d.columns[1].col == gantt::kResponsibleCol &&
+              d.columns[0].x + d.columns[0].w == d.columns[1].x && d.columns[1].x + d.columns[1].w == d.axis.x0,
+          "Gantt: gezeigte Beschriftungsspalten mit Lage (Zellen zum Bearbeiten)");
+    {
+        ChartOptions remark = ganttOptions();
+        remark.gantt.remark = true;  // eingeschaltet, aber noch ohne Eintrag
+        const Drawing r = layoutChart(item, remark, box);
+        const auto col = std::find_if(r.columns.begin(), r.columns.end(), [](const ColumnBand& c) { return c.col == gantt::kRemarkCol; });
+        check(col != r.columns.end() && col->w >= 60 * kEmuPerPt, "Gantt: leere, eingeschaltete Spalte hat Platz zum Eintippen");
+    }
     const Prim* ms = find(d, "milestone r3");
     check(ms && ms->kind == Prim::Kind::Shape && ms->shape == "triangle" && ms->rotation == 0 &&
               std::llabs(ms->x + ms->w / 2 - std::llround(d.axis.xOf(*parseIsoDate(L"2026-12-11")))) <= 1,
