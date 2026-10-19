@@ -78,6 +78,11 @@ public:
         commitText(row, column, text);
     }
 
+    void menu(int row, const std::wstring& what) {
+        cur_ = anchor_ = {0, row};
+        command(what == L"insertRow" ? kInsertRow : what == L"deleteRow" ? kDeleteRow : kUndo);
+    }
+
     void paste(int row, int column, const std::wstring& text) {
         cur_ = anchor_ = {column, row};
         pasteText(text);
@@ -116,7 +121,13 @@ private:
     }
     void pushUndo() {
         undo_.push_back(table_);
-        if (undo_.size() > 100) undo_.erase(undo_.begin());
+        undoShift_.push_back({});
+        if (undo_.size() > 100) undo_.erase(undo_.begin()), undoShift_.erase(undoShift_.begin());
+    }
+    // Zeilen eingefügt/gelöscht: melden (Zeitplan verschiebt seine Elemente mit) und fürs Rückgängigmachen merken
+    void shifted(int from, int delta) {
+        undoShift_.back() = {from, delta};
+        if (cb_.rowsShifted) cb_.rowsShifted(from, delta);
     }
     void changed() {
         normalize();
@@ -426,13 +437,18 @@ private:
         switch (id) {
             case kInsertRow:
                 pushUndo();
-                if (r0 <= static_cast<int>(table_.size())) table_.insert(table_.begin() + r0, Row{});
+                if (r0 <= static_cast<int>(table_.size())) {
+                    table_.insert(table_.begin() + r0, Row{});
+                    shifted(r0, 1);
+                }
                 changed();
                 break;
             case kDeleteRow:
                 pushUndo();
-                for (int r = r1; r >= r0; --r)
-                    if (r < static_cast<int>(table_.size())) table_.erase(table_.begin() + r);
+                if (const int last = std::min(r1, static_cast<int>(table_.size()) - 1); last >= r0) {
+                    table_.erase(table_.begin() + r0, table_.begin() + last + 1);
+                    shifted(r0, r0 - last - 1);
+                }
                 changed();
                 break;
             case kInsertColumn:
@@ -497,6 +513,9 @@ private:
                 if (!undo_.empty()) {
                     table_ = undo_.back();
                     undo_.pop_back();
+                    // shortcut: Rückgängig nach dem Löschen bringt die Zeilen zurück, aber nicht deren Formatierung/freie Elemente
+                    if (const auto [from, delta] = undoShift_.back(); delta != 0 && cb_.rowsShifted) cb_.rowsShifted(from, -delta);
+                    undoShift_.pop_back();
                     changed();
                 }
                 break;
@@ -716,6 +735,7 @@ private:
     HFONT font_ = nullptr;
     std::vector<Row> table_;
     std::vector<std::vector<Row>> undo_;
+    std::vector<std::pair<int, int>> undoShift_;  // je Rückgängig-Stand: eingefügte/gelöschte Zeilen (from, delta)
     std::wstring sep_;
     DatasheetCallbacks cb_;
     std::wstring hint_;
@@ -741,6 +761,7 @@ void datasheetClose(Datasheet* sheet) { sheet->close(); }
 HWND datasheetWindow(Datasheet* sheet) { return sheet->hwnd(); }
 void datasheetEnter(Datasheet* sheet, int row, int column, const std::wstring& text) { sheet->enter(row, column, text); }
 void datasheetPaste(Datasheet* sheet, int row, int column, const std::wstring& text) { sheet->paste(row, column, text); }
+void datasheetMenu(Datasheet* sheet, int row, const std::wstring& what) { sheet->menu(row, what); }
 std::wstring datasheetText(Datasheet* sheet, int row, int column) { return sheet->text(row, column); }
 
 }  // namespace rethink::addin

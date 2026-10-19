@@ -918,6 +918,7 @@ struct GridContext {
     long shapeId = 0;
     std::wstring name;
     Datasheet* window = nullptr;
+    int shiftFrom = 0, shiftDelta = 0;  // Zeitplan: beim nächsten changed Elemente/Formatierung mitverschieben
 };
 std::map<std::wstring, GridContext*> g_grids;  // Schlüssel wie beim Excel-Datenblatt (Folie + Name)
 ComPtr<IDispatch> g_gridApp;
@@ -956,8 +957,14 @@ void applyGridTable(GridContext& g, const std::vector<Row>& table) {
         DataItem item = onWorker([&] {
             DataItem parsed = parseDataItemJson(stored);
             parsed.table = table;
+            if (g.shiftDelta != 0) {
+                ChartOptions options = optionsOf(parsed);
+                shiftGanttRows(options, g.shiftFrom, g.shiftDelta);
+                parsed.chartJson = mergeChartJson(parsed.chartJson, ganttEditsJson(options.gantt));
+            }
             return parsed;
         });
+        g.shiftDelta = 0;
         auto result = renderElement(g.slide.Get(), group, item, layoutBox(group.Get()));
         g.shapeId = disp::call(result.Get(), L"Id").toLong();
     } catch (const std::exception& e) {
@@ -1011,7 +1018,8 @@ void openDatasheet(IDispatch* app, bool show) {
             MessageBoxW(nullptr, widen(e.what()).c_str(), kTitle, MB_ICONWARNING);
         }
     };
-    if (elementInfo(element.Get()).gantt)
+    if (elementInfo(element.Get()).gantt) {
+        callbacks.rowsShifted = [ctx](int from, int delta) { ctx->shiftFrom = from, ctx->shiftDelta = delta; };
         callbacks.sortCategories = [ctx]() {
             try {
                 auto group = g_gridApp ? findShape(ctx->slide.Get(), ctx->shapeId) : nullptr;
@@ -1022,6 +1030,7 @@ void openDatasheet(IDispatch* app, bool show) {
                 MessageBoxW(ctx->window ? datasheetWindow(ctx->window) : nullptr, widen(e.what()).c_str(), kTitle, MB_ICONWARNING);
             }
         };
+    }
     callbacks.closed = [key, ctx]() {
         g_grids.erase(key);
         delete ctx;
@@ -1038,6 +1047,8 @@ void openDatasheet(IDispatch* app, bool show) {
 void datasheetEnterCell(IDispatch* app, int row, int column, const std::wstring& text) {
     datasheetEnter(requireGrid(app).window, row, column, text);
 }
+
+void datasheetMenuCommand(IDispatch* app, int row, const std::wstring& what) { datasheetMenu(requireGrid(app).window, row, what); }
 
 void datasheetPasteText(IDispatch* app, int row, int column, const std::wstring& text) {
     datasheetPaste(requireGrid(app).window, row, column, text);
@@ -1347,7 +1358,10 @@ void writeExcelTable(Sheet& s, const std::vector<Row>& table) {
 }
 
 void syncDatasheets(IDispatch* group, const std::vector<Row>& table) {
-    if (GridContext* g = gridFor(group)) datasheetSetTable(g->window, table);
+    if (GridContext* g = gridFor(group)) {
+        g->shapeId = disp::call(group, L"Id").toLong();  // ein vollständiges Neuzeichnen ersetzt die Gruppe
+        datasheetSetTable(g->window, table);
+    }
     if (Sheet* s = openExcelSheet(group)) {
         try {
             writeExcelTable(*s, table);

@@ -231,6 +231,15 @@ try {
     $g = $slide.Shapes.Item($name)
     Expect ($g.GroupItems.Item('activity r4').TextFrame.TextRange.Text -eq 'Konzept') 'Zeile per Ziehen verschoben'
     Expect ($api.DatasheetCell(4, 0) -eq 'Konzept' -and $api.DatasheetCell(4, 6) -eq 'Planung') "Zeile übernimmt die Kategorie der Ablagestelle ($($api.DatasheetCell(4, 6)))"
+    # Zeile im Datenblatt einfügen/löschen: frei gesetzte Elemente bleiben bei ihrer Zeile
+    $row3 = $g.GroupItems.Item('activity r3'); $label3 = $row3.TextFrame.TextRange.Text
+    $api.GanttCommand('new=chevron', (Center $g.GroupItems.Item('bar r3'))[0], $row3.Top + $row3.Height / 2)
+    $item = @(Roles $slide.Shapes.Item($name) | Where-Object { $_ -match '^item \d+$' })[-1]
+    function SameRow($r) { $gg = $slide.Shapes.Item($name); [math]::Abs((Center $gg.GroupItems.Item($item))[1] - (Center $gg.GroupItems.Item("activity r$r"))[1]) -lt 3 }
+    $api.DatasheetMenu(3, 'insertRow')
+    Expect ((SameRow 4) -and $api.DatasheetCell(4, 0) -eq $label3) 'Zeile im Datenblatt eingefügt: frei gesetztes Element rückt mit'
+    $api.DatasheetMenu(3, 'deleteRow')
+    Expect ((SameRow 3) -and $api.DatasheetCell(3, 0) -eq $label3) 'Zeile im Datenblatt gelöscht: Element rückt zurück'
     $api.CloseDatasheet()
     $api.GanttCommand('design=modern')
     $roles = Roles $slide.Shapes.Item($name)

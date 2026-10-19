@@ -66,6 +66,7 @@ enum : DISPID {
     kDatasheetWorkbook,
     kOpenExcelDatasheet,
     kDatasheetEnter,
+    kDatasheetMenu,
     kDatasheetPaste,
     kDatasheetCell,
     kCloseDatasheet,
@@ -98,7 +99,7 @@ constexpr Member kMembers[] = {
     {L"RethinkInsertWaterfall", kOnInsertWaterfall}, {L"RethinkOpenDatasheet", kOnOpenDatasheet},
     {L"InsertWaterfall", kInsertWaterfall}, {L"OpenDatasheet", kOpenDatasheet}, {L"ApplyDatasheets", kApplyDatasheets},
     {L"EventStatus", kEventStatus},  {L"AdjustSegment", kAdjustSegment}, {L"OverlayInfo", kOverlayInfo},
-    {L"DatasheetWorkbook", kDatasheetWorkbook}, {L"OpenExcelDatasheet", kOpenExcelDatasheet}, {L"DatasheetEnter", kDatasheetEnter},
+    {L"DatasheetWorkbook", kDatasheetWorkbook}, {L"OpenExcelDatasheet", kOpenExcelDatasheet}, {L"DatasheetEnter", kDatasheetEnter}, {L"DatasheetMenu", kDatasheetMenu},
     {L"DatasheetPaste", kDatasheetPaste}, {L"DatasheetCell", kDatasheetCell}, {L"CloseDatasheet", kCloseDatasheet},
     {L"DatasheetCount", kDatasheetCount}, {L"DragSegment", kDragSegment},
     {L"RethinkInsertGallery", kOnInsertGallery}, {L"RethinkInsertGantt", kOnInsertGantt}, {L"RethinkGanttVisible", kOnGanttVisible},
@@ -460,6 +461,7 @@ public:
             case kOpenDatasheet: openDatasheet(app_.Get(), boolArg(params, 0, false)); return S_OK;
             case kOpenExcelDatasheet: setString(result, openExcelDatasheet(app_.Get(), boolArg(params, 0, false))); return S_OK;
             case kDatasheetEnter: datasheetEnterCell(app_.Get(), longArg(params, 0), longArg(params, 1), stringArg(params, 2, true)); return S_OK;
+            case kDatasheetMenu: datasheetMenuCommand(app_.Get(), longArg(params, 0), stringArg(params, 1, false)); return S_OK;
             case kDatasheetPaste: datasheetPasteText(app_.Get(), longArg(params, 0), longArg(params, 1), stringArg(params, 2, false)); return S_OK;
             case kDatasheetCell: setString(result, datasheetCellText(app_.Get(), longArg(params, 0), longArg(params, 1))); return S_OK;
             case kCloseDatasheet: closeDatasheet(app_.Get()); return S_OK;

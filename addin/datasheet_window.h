@@ -18,6 +18,7 @@ struct DatasheetCallbacks {
     std::function<void(const std::vector<Row>&)> changed;  // nach jeder Änderung
     std::function<void()> openInExcel;                      // Kontextmenü „In Excel bearbeiten“
     std::function<void()> sortCategories;                   // Zeitplan: Kontextmenü „Nach Kategorie sortieren …“
+    std::function<void(int from, int delta)> rowsShifted;   // vor changed: Zeilen ab from eingefügt (+) bzw. gelöscht (−)
     std::function<void()> closed;
 };
 
@@ -34,6 +35,7 @@ HWND datasheetWindow(Datasheet* sheet);
 // Für Tests: wie Eingabe + Enter in Zelle (row, column; 0-basiert wie "table") bzw. Anzeige lesen.
 void datasheetEnter(Datasheet* sheet, int row, int column, const std::wstring& text);
 void datasheetPaste(Datasheet* sheet, int row, int column, const std::wstring& tabSeparated);
+void datasheetMenu(Datasheet* sheet, int row, const std::wstring& what);  // Kontextmenü: "insertRow", "deleteRow", "undo"
 std::wstring datasheetText(Datasheet* sheet, int row, int column);
 
 }  // namespace rethink::addin

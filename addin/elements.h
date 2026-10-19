@@ -34,6 +34,7 @@ ElementInfo elementInfo(IDispatch* element);
 void openDatasheet(IDispatch* app, bool show);
 // Für Tests: Eingabe in die Zelle (row, column wie "table") des offenen Datenblatts, Anzeige lesen, schließen.
 void datasheetEnterCell(IDispatch* app, int row, int column, const std::wstring& text);
+void datasheetMenuCommand(IDispatch* app, int row, const std::wstring& what);  // Tests: Zeile einfügen/löschen, Rückgängig
 void datasheetPasteText(IDispatch* app, int row, int column, const std::wstring& text);
 std::wstring datasheetCellText(IDispatch* app, int row, int column);
 void closeDatasheet(IDispatch* app);
