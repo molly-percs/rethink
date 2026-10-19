@@ -53,6 +53,7 @@ add_library(rethink_addin SHARED
     addin/gallery.cpp
     addin/gantt_menu.cpp
     addin/radial_menu.cpp
+    addin/ribbon_icons.cpp
     addin/category_dialog.cpp
     addin/addin.rc
     addin/addin.def
@@ -62,7 +63,7 @@ set_target_properties(rethink_addin PROPERTIES OUTPUT_NAME rethink-addin)
 set_source_files_properties(addin/addin.rc PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/addin/ribbon.xml)
 target_include_directories(rethink_addin PRIVATE addin ${CMAKE_CURRENT_BINARY_DIR})
 target_compile_options(rethink_addin PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${RETHINK_CXX_OPTIONS} /WX>)
-target_link_libraries(rethink_addin PRIVATE rethink_core user32 gdi32 shell32 comdlg32 comctl32 uuid)
+target_link_libraries(rethink_addin PRIVATE rethink_core user32 gdi32 gdiplus shell32 comdlg32 comctl32 uuid)
 
 # Selbsttest des Add-ins (ohne Registrierung und ohne PowerPoint)
 add_executable(addin_selftest tests/addin_selftest.cpp)
