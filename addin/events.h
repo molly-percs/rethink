@@ -33,5 +33,8 @@ std::wstring simulateGanttDrag(const std::string& role, int grip, const std::vec
 // Was liegt im ausgewählten Zeitplan unter dem Mauszeiger (Kontextmenü, Doppelklick) bzw. an einem Folienpunkt (Tests)?
 GanttHit ganttHitAtCursor(IDispatch* app);
 GanttHit ganttHitAtPoint(IDispatch* app, double x, double y);
+// Für Tests: Rechtsklick an einem Folienpunkt des ausgewählten Zeitplans. Freie Stelle im Zeitbereich: öffnet das Rundmenü,
+// liefert seine Schaltflächen und löst command aus (leer = offen lassen); sonst leer (dort käme das Kontextmenü).
+std::wstring simulateGanttRightClick(double x, double y, const std::wstring& command);
 
 }  // namespace rethink::addin

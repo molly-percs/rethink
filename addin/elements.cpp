@@ -110,7 +110,7 @@ std::wstring signature(const Color& c) {
 void applyColor(IDispatch* colorFormat, const Color& c) {
     if (c.kind == Color::Kind::Scheme) {
         disp::put(colorFormat, L"ObjectThemeColor", themeColor(c.scheme));
-        if (c.brightness != 0) disp::put(colorFormat, L"Brightness", c.brightness);  // Designfarbe heller/dunkler, folgt dem Master
+        disp::put(colorFormat, L"Brightness", c.brightness);  // Designfarbe heller/dunkler, folgt dem Master (0 setzt zurück)
     } else if (c.kind == Color::Kind::Rgb) {
         disp::put(colorFormat, L"RGB", static_cast<long>(((c.rgb >> 16) & 0xFF) | (c.rgb & 0xFF00) | ((c.rgb & 0xFF) << 16)));
     }
@@ -167,6 +167,19 @@ void formatText(IDispatch* shape, const Prim& p) {
     disp::put(disp::object(range.Get(), L"ParagraphFormat").Get(), L"Alignment", p.align == Align::Left ? 1L : p.align == Align::Right ? 3L : 2L);
 }
 
+// Füllung eines Rechtecks/einer Form; ohne Farbe unsichtbar
+void applyFill(IDispatch* shape, const Prim& p) {
+    auto fill = disp::object(shape, L"Fill");
+    if (p.fill.kind == Color::Kind::None) {
+        disp::put(fill.Get(), L"Visible", 0L);
+        return;
+    }
+    disp::put(fill.Get(), L"Visible", -1L);
+    disp::call(fill.Get(), L"Solid");
+    applyColor(disp::object(fill.Get(), L"ForeColor").Get(), p.fill);
+    if (p.transparency > 0) disp::put(fill.Get(), L"Transparency", p.transparency);
+}
+
 // Umriss eines Rechtecks/einer Form: Farbe, Stärke, gestrichelt; ohne Farbe unsichtbar
 void applyOutline(IDispatch* shape, const Prim& p) {
     auto line = disp::object(shape, L"Line");
@@ -194,10 +207,7 @@ ComPtr<IDispatch> drawPrim(IDispatch* shapes, const Prim& p) {
         case Prim::Kind::Shape: {
             const long type = p.kind == Prim::Kind::Shape ? autoShapeType(p.shape) : kMsoShapeRectangle;
             auto shape = disp::object(shapes, L"AddShape", type, pt(p.x), pt(p.y), pt(p.w), pt(p.h));
-            auto fill = disp::object(shape.Get(), L"Fill");
-            disp::call(fill.Get(), L"Solid");
-            applyColor(disp::object(fill.Get(), L"ForeColor").Get(), p.fill);
-            if (p.transparency > 0) disp::put(fill.Get(), L"Transparency", p.transparency);
+            applyFill(shape.Get(), p);
             applyOutline(shape.Get(), p);
             disp::put(disp::object(shape.Get(), L"Shadow").Get(), L"Visible", 0L);
             if (p.rotation != 0) disp::put(shape.Get(), L"Rotation", p.rotation);
@@ -278,7 +288,7 @@ void updateShape(IDispatch* shape, const Prim& p) {
     if (p.kind == Prim::Kind::Rect || p.kind == Prim::Kind::Shape) {
         const auto sig = shapeSignature(p);
         if (tagValue(shape, kStyleTag) != sig) {
-            applyColor(disp::object(disp::object(shape, L"Fill").Get(), L"ForeColor").Get(), p.fill);
+            applyFill(shape, p);
             applyOutline(shape, p);
             setTag(shape, kStyleTag, sig);
         }
@@ -1636,6 +1646,10 @@ GanttHit ganttHitAt(IDispatch* element, double x, double y) {
             break;
         }
     }
+    for (auto it = d.prims.rbegin(); hit.role.empty() && it != d.prims.rend(); ++it) {  // Datumsbeschriftungen (Minileiste „Datum“)
+        const bool dateLabel = it->role.ends_with(" label") || it->role.starts_with("milestone label");
+        if (dateLabel && !it->role.starts_with("category") && ex >= it->x && ex <= it->x + it->w && ey >= it->y && ey <= it->y + it->h) hit.label = it->role;
+    }
     return hit;
 }
 
@@ -1892,6 +1906,27 @@ void ganttCommand(IDispatch* app, const std::wstring& command, const GanttHit& h
         // Zeile an eine andere Stelle ziehen (Overlay): übernimmt dort die Kategorie, Datenblatt und Excel folgen
         const int row = requireRow(hit), target = std::stoi(value);
         modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { moveGanttRowTo(item, o, row, target); });
+    } else if (key == L"fill" || key == L"line" || key == L"lineWeight" || key == L"dashed" || key == L"barStyle") {
+        // Aussehen der angeklickten Form: Datenblatt-Zeilen über rowStyles, frei gesetzte Elemente über ihren Stil
+        if (hit.role.empty()) throw Error("Bitte mit der rechten Maustaste auf einen Balken, Meilenstein, eine Klammer oder Schattierung klicken.");
+        if ((key == L"fill" || key == L"line") && !isStyleColor(value)) throw Error("Unbekannte Farbe: " + narrow(value));
+        const std::string role = hit.role;
+        modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) {
+            ShapeStyle& s = ganttStyle(o, ganttTarget(item, o, role));
+            if (key == L"fill") s.fill = value;
+            else if (key == L"line") s.line = value;
+            else if (key == L"lineWeight") s.lineWeight = std::clamp(std::stod(value), 0.0, 12.0);
+            else if (key == L"dashed") s.dashed = flag(value);
+            else if (value == L"dashed") {
+                // gestrichelter Balken: nur der Umriss, in der Farbe der Füllung (sie kommt beim Zurückschalten wieder)
+                if (s.line.empty() && s.fill != L"none") s.line = s.fill;
+                s.fill = L"none", s.dashed = true;
+            } else if (value == L"solid") {
+                if (s.fill == L"none") s.fill = s.line;
+                s.dashed = false;
+            }
+            else throw std::invalid_argument("barStyle=solid oder barStyle=dashed erwartet");
+        });
     } else if (key == L"link") {
         const int row = requireRow(hit);
         modifyGantt(app, e, [&](DataItem& item, ChartOptions&) { toggleGanttLink(item, row, value); });
@@ -1942,6 +1977,41 @@ GanttState ganttState(IDispatch* app, const GanttHit& hit) {
             const auto kind = m.options.gantt.items[t.item].kind;
             s.rowShape = kind == GanttItem::Kind::Pentagon ? L"pentagon" : kind == GanttItem::Kind::Chevron ? L"chevron" : L"";
         }
+        if (t.kind != GanttTarget::Kind::None) {
+            const auto itemKind = t.item >= 0 ? m.options.gantt.items[t.item].kind : GanttItem::Kind::Bar;
+            const bool process = itemKind == GanttItem::Kind::Pentagon || itemKind == GanttItem::Kind::Chevron;
+            switch (t.kind) {
+                case GanttTarget::Kind::Bar: s.defaultFill = process ? look.process : look.bar; break;
+                case GanttTarget::Kind::Milestone: s.defaultFill = look.milestone; break;
+                case GanttTarget::Kind::Bracket: s.defaultFill = look.bracket; break;
+                case GanttTarget::Kind::Shade: s.defaultFill = look.shade; break;
+                case GanttTarget::Kind::None: break;
+            }
+            ChartOptions o = m.options;
+            try {
+                s.targetStyle = ganttStyle(o, t);
+            } catch (const std::invalid_argument&) {
+            }
+            // Farben wie gezeichnet (Design, Kategoriefarbe oder eigene Formatierung) für die Farbfelder der Minileiste
+            try {
+                auto shape = disp::object(disp::object(element.Get(), L"GroupItems").Get(), L"Item", widen(hit.role));
+                auto fill = disp::object(shape.Get(), L"Fill"), line = disp::object(shape.Get(), L"Line");
+                if (disp::call(fill.Get(), L"Visible").toLong() != 0) s.targetFill = disp::call(disp::object(fill.Get(), L"ForeColor").Get(), L"RGB").toLong();
+                if (disp::call(line.Get(), L"Visible").toLong() != 0) {
+                    s.targetLine = disp::call(disp::object(line.Get(), L"ForeColor").Get(), L"RGB").toLong();
+                    s.targetWeight = disp::call(line.Get(), L"Weight").toDouble();
+                }
+            } catch (...) {
+            }
+        }
+    }
+    try {  // Designfarben des Folienmasters (msoThemeColorSchemeIndex 1–10)
+        static const wchar_t* kNames[] = {L"tx1", L"bg1", L"tx2", L"bg2", L"accent1", L"accent2", L"accent3", L"accent4", L"accent5", L"accent6"};
+        auto scheme = disp::object(disp::object(element.Get(), L"Parent").Get(), L"ThemeColorScheme");
+        for (long i = 1; i <= 10; ++i)
+            s.theme.push_back({kNames[i - 1], disp::call(disp::object(scheme.Get(), L"Colors", i).Get(), L"RGB").toLong()});
+    } catch (...) {
+        s.theme.clear();
     }
     if (hit.row >= gantt::kFirstActivityRow && static_cast<size_t>(hit.row) < m.item.table.size()) {
         const Row& row = m.item.table[hit.row];

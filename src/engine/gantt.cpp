@@ -15,7 +15,6 @@ namespace {
 using namespace draw;
 using namespace gantt;
 
-constexpr std::uint32_t kToday = 0xC00000;
 
 // ---- Gestaltung ----
 
@@ -35,7 +34,10 @@ struct DesignSpec {
     Align scaleAlign = Align::Center;
     Color headerFill, headerText = Color::schemeColor(L"tx1"), scaleLine = Color::schemeColor(L"tx1", 0.75);
     Color text = Color::schemeColor(L"tx1"), grid = Color::schemeColor(L"tx1", 0.75), rule = Color::schemeColor(L"tx1");
-    Color bar = Color::schemeColor(L"accent1"), milestone = Color::schemeColor(L"accent2");
+    // Elementfarben aus dem Design des Folienmasters, je Art eine eigene Designfarbe
+    Color bar = Color::schemeColor(L"accent1"), milestone = Color::schemeColor(L"accent2"), process = Color::schemeColor(L"accent3");
+    Color bracket = Color::schemeColor(L"accent4"), shade = Color::schemeColor(L"accent1", 0.8), link = Color::schemeColor(L"tx2");
+    Color today = Color::schemeColor(L"accent6");
     Color categoryFill;  // Block: feste Farbe; ohne: je Kategorie eine Akzentfarbe
 };
 
@@ -47,7 +49,6 @@ DesignSpec designSpec(GanttDesign design) {
             s.scaleBold = true, s.scaleTicks = false, s.fineDotted = true, s.frame = true, s.milestoneDateBelow = true;
             s.scaleAlign = Align::Left;
             s.grid = Color::schemeColor(L"tx1"), s.scaleLine = Color::schemeColor(L"tx1");
-            s.bar = Color::schemeColor(L"tx1"), s.milestone = Color::schemeColor(L"tx1");
             break;
         case GanttDesign::Modern:
             s.barHeight = 0.5, s.barShape = L"rounded", s.marker = L"circle";
@@ -365,6 +366,8 @@ GanttLook ganttLook(const GanttOptions& g) {
     look.separators = g.separators.value_or(spec.separators);
     look.rowSeparators = g.rowSeparators.value_or(spec.rowSeparators);
     look.milestoneLines = g.milestoneLines.value_or(spec.milestoneLines);
+    look.bar = spec.bar.scheme, look.milestone = spec.milestone.scheme, look.process = spec.process.scheme;
+    look.bracket = spec.bracket.scheme, look.shade = spec.shade.scheme;
     return look;
 }
 
@@ -657,7 +660,7 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
         const Emu x0 = L.x(std::max(*s, t0)), x1 = L.x(std::min(*e, t1));
         const Emu bottom = L.msTop + L.msRowH;
         Prim p = rect(x0, L.rowsTop, x1 - x0, std::max<Emu>(bottom - L.rowsTop, 1),
-                      it.fill ? Color::rgbColor(*it.fill) : Color::schemeColor(L"accent1", 0.8), std::format("item {}", i));
+                      it.fill ? Color::rgbColor(*it.fill) : spec.shade, std::format("item {}", i));
         p.flags = "shade";
         d.prims.push_back(p);
         const std::wstring caption = it.text.empty() ? rangeText(*s, *e, L.dateFormat, o.language, BarLabel::Range) : it.text;
@@ -686,7 +689,7 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
     const auto today = g.todayLine ? (g.today.empty() ? std::optional<double>(g.referenceDay) : parseIsoDate(g.today)) : std::nullopt;
     if (today && *today >= t0 && *today < t1) {
         const Emu tx = L.x(std::floor(*today) + 0.5);
-        Prim p = line(tx, L.rowsTop, tx, L.msTop + L.msRowH, Color::rgbColor(kToday), 1.0, "today");
+        Prim p = line(tx, L.rowsTop, tx, L.msTop + L.msRowH, spec.today, 1.0, "today");
         p.dashed = true;
         d.prims.push_back(p);
     }
@@ -793,11 +796,11 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
             const std::string role = std::format("item {}", i);
             const Emu x0 = L.x(std::max(*s, t0)), x1 = L.x(std::min(*e, t1));
             const Emu ly = y + th + th / 8, tick = th / 3;
-            Prim p = line(x0, ly, x1, ly, spec.text, 1.0, role);
+            Prim p = line(x0, ly, x1, ly, spec.bracket, 1.0, role);
             p.flags = "bracket";
             d.prims.push_back(p);
-            d.prims.push_back(line(x0, ly, x0, ly + tick, spec.text, 1.0, role + " left"));
-            d.prims.push_back(line(x1, ly, x1, ly + tick, spec.text, 1.0, role + " right"));
+            d.prims.push_back(line(x0, ly, x0, ly + tick, spec.bracket, 1.0, role + " left"));
+            d.prims.push_back(line(x1, ly, x1, ly + tick, spec.bracket, 1.0, role + " right"));
             const std::wstring caption = it.text.empty() ? rangeText(*s, *e, L.dateFormat, o.language, BarLabel::Range) : it.text;
             const Emu tw = std::max<Emu>(x1 - x0, textWidth(caption, o.fontPt) + th / 4);
             d.prims.push_back(text((x0 + x1 - tw) / 2, y, tw, th, caption, o.fontPt, Align::Center, spec.text, role + " label"));
@@ -826,7 +829,8 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
             if (!s || !e || *e <= *s) continue;
             const wchar_t* shapeName = it.kind == GanttItem::Kind::Pentagon ? L"pentagon" : it.kind == GanttItem::Kind::Chevron ? L"chevron" : defaultBar.c_str();
             L.bar(std::format("item {}", i), r, *s, *e, shapeName, it.kind == GanttItem::Kind::Bar ? L"" : it.text,
-                  it.fill ? Color::rgbColor(*it.fill) : rowColor.value_or(spec.bar), it.kind == GanttItem::Kind::Bar ? g.barLabels : BarLabel::None,
+                  it.fill ? Color::rgbColor(*it.fill) : rowColor.value_or(it.kind == GanttItem::Kind::Bar ? spec.bar : spec.process),
+                  it.kind == GanttItem::Kind::Bar ? g.barLabels : BarLabel::None,
                   it.style);
         }
         // Meilensteine (Datenblatt, dann frei gesetzte)
@@ -875,7 +879,7 @@ Drawing layoutGantt(const DataItem& item, const ChartOptions& o, Box b) {
                 if (lower(trimmed(textAt(item, r, kLabelCol))) == lower(name)) return r;
             return -1;
         };
-        const Color c = Color::schemeColor(L"tx1", 0.4);
+        const Color c = spec.link;
         const Emu arrow = th / 3;
         for (int r = kFirstActivityRow; r < static_cast<int>(item.table.size()); ++r) {
             const std::wstring list = textAt(item, r, kPredecessorCol);

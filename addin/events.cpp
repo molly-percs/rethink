@@ -7,6 +7,7 @@
 #include "engine/chart.h"
 #include "gantt_menu.h"
 #include "overlay.h"
+#include "radial_menu.h"
 
 #include <ocidl.h>
 
@@ -38,6 +39,7 @@ double g_cachedLeft = -1, g_cachedTop = -1, g_cachedWidth = -1, g_cachedHeight =
 OverlayContent g_shown;
 std::wstring g_tooltip;  // Kurzinfo während eines Ziehens
 RECT g_marker{};         // Einfügelinie beim Ziehen einer Zeile
+bool g_scaleSelected = false;  // Skala in der Gruppe ausgewählt: blaues Band mit ◀▶
 UINT_PTR g_trackTimer = 0;
 bool g_acting = false;
 
@@ -50,6 +52,7 @@ struct Drag {
     int decimals = 0;
     double pointsPerPixel = 1;  // Zeitplan: Folienpunkte je Bildschirmpixel
     int row = 0, target = 0;    // Zeile ziehen: Ausgangs- und Zielzeile
+    bool range = false;         // Zeitplan: ein Skalenende wird gezogen
     std::wstring error;         // erst nach dem Loslassen melden: während des Ziehens hält das Overlay die Maus
 };
 bool g_dragging = false;
@@ -220,7 +223,14 @@ void addGanttHandles(OverlayContent& c, const Mapping& m) {
         h.role = std::format("activity r{}", h.row);
         if (h.rect.right > h.rect.left && !hitsGrip(h.rect, c.element)) c.handles.push_back(h);
     }
-    if (g_gantt.valid) {
+    if (g_gantt.valid && (g_scaleSelected || (g_dragging && g_drag.range))) {
+        // Skala ausgewählt oder Bereich wird gezogen: blaues Band über der Skala, ◀▶ an beiden Enden
+        const long left = m.x(g_gantt.plotLeft), right = m.x(g_gantt.plotRight), top = m.y(g_gantt.scaleTop), bottom = m.y(g_gantt.scaleBottom);
+        const long mid = (top + bottom) / 2, half = std::min<long>(std::max<long>((bottom - top) / 2, scaled(5)), scaled(8)), w = scaled(9);
+        c.band = {left, top, right, bottom};
+        handle({left - w, mid - half, left + w, mid + half}, OverlayAction::RangeStart, "range", HandleStyle::DoubleArrow);
+        handle({right - w, mid - half, right + w, mid + half}, OverlayAction::RangeEnd, "range", HandleStyle::DoubleArrow);
+    } else if (g_gantt.valid) {
         const int midY = (m.y(g_gantt.scaleTop) + m.y(g_gantt.scaleBottom)) / 2, half = scaled(7), w = scaled(9);
         const long left = m.x(g_gantt.plotLeft), right = m.x(g_gantt.plotRight);
         RECT a{left + scaled(2), midY - half, left + scaled(2) + w, midY + half}, b{right - scaled(2) - w, midY - half, right - scaled(2), midY + half};
@@ -254,7 +264,7 @@ OverlayContent buildContent(double left, double top, double width, double height
 }
 
 bool sameContent(const OverlayContent& a, const OverlayContent& b) {
-    if (!EqualRect(&a.element, &b.element) || a.handles.size() != b.handles.size() || a.tooltip != b.tooltip) return false;
+    if (!EqualRect(&a.element, &b.element) || !EqualRect(&a.band, &b.band) || a.handles.size() != b.handles.size() || a.tooltip != b.tooltip) return false;
     for (size_t i = 0; i < a.handles.size(); ++i)
         if (!EqualRect(&a.handles[i].rect, &b.handles[i].rect)) return false;
     return true;
@@ -298,10 +308,27 @@ void placeOverlayDuringDrag() {
     showOverlay(powerPointWindow(), g_shown, onOverlayAction);
 }
 
+// Skala als Form in der Gruppe ausgewählt (zweiter Klick auf die Skala, wie im Original)
+bool scaleSelected() {
+    try {
+        auto selection = disp::object(disp::object(g_app.Get(), L"ActiveWindow").Get(), L"Selection");
+        if (disp::call(selection.Get(), L"HasChildShapeRange").toLong() == 0) return false;
+        auto range = disp::object(selection.Get(), L"ChildShapeRange");
+        return disp::call(range.Get(), L"Count").toLong() == 1 && disp::call(range.Get(), L"Name").str().starts_with(L"scale");
+    } catch (...) {
+        return false;
+    }
+}
+
 void track() {
     auto current = rethinkElementOf(disp::object(disp::object(g_app.Get(), L"ActiveWindow").Get(), L"Selection").Get());
     if (!current) return stopTracking();
     g_element = current;
+    if (const bool scale = g_info.gantt && scaleSelected(); scale != g_scaleSelected) {
+        g_scaleSelected = scale;
+        placeOverlay(true);
+        return;
+    }
     // Größe geändert? Erst nach dem Loslassen der Maus neu zeichnen.
     if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0 && relayoutIfResized(g_element.Get())) {
         placeOverlay(true);
@@ -356,6 +383,7 @@ void beginDrag(const OverlayHandle& handle) {
     if (isGanttAction(handle.action)) {
         g_drag.kind = DragKind::Gantt;
         g_drag.pointsPerPixel = 1.0 / std::max(std::fabs(m.ax), 1e-6);
+        g_drag.range = handle.action == OverlayAction::RangeStart || handle.action == OverlayAction::RangeEnd;
         g_tooltip = beginGanttDrag(g_app.Get(), handle.role, gripOf(handle.action), g_drag.pointsPerPixel);
         g_drag.active = true;
         return;
@@ -529,22 +557,15 @@ ComPtr<IDispatch> ganttAtScreen(POINT p) {
     }
 }
 
-void CALLBACK onShowMenu(HWND, UINT, UINT_PTR id, DWORD) {
-    KillTimer(nullptr, id);
-    g_menuTimer = 0;
-    ComPtr<IDispatch> element = std::move(g_menuElement);
-    if (!element || !g_app) return;
+// Menüs ändern den Zeitplan: Auswahlereignisse dabei nicht verarbeiten, danach das Overlay neu setzen
+template <class F>
+void inMenu(F&& body) {
     g_inMenu = true;
+    g_acting = true;  // eigene Änderungen: Auswahlereignisse nicht verarbeiten
     try {
-        if (!g_element || disp::call(g_element.Get(), L"Id").toLong() != disp::call(element.Get(), L"Id").toLong()) {
-            disp::call(element.Get(), L"Select");  // Rechtsklick auf einen nicht ausgewählten Zeitplan wählt ihn aus
-            g_element = element;
-            placeOverlay(true);
-        }
-        const Mapping m = currentMapping();
-        const GanttHit hit = ganttHitAt(element.Get(), m.pointX(g_menuAt.x), m.pointY(g_menuAt.y));
-        g_acting = true;  // eigene Änderungen: Auswahlereignisse nicht verarbeiten
-        showGanttMenu(g_app.Get(), powerPointWindow(), g_menuAt, hit);
+        body();
+    } catch (const winrt::hresult_error& e) {
+        MessageBoxW(powerPointWindow(), e.message().c_str(), L"rethink", MB_ICONINFORMATION);
     } catch (const std::exception& e) {
         MessageBoxW(powerPointWindow(), widen(e.what()).c_str(), L"rethink", MB_ICONINFORMATION);
     } catch (...) {
@@ -561,10 +582,67 @@ void CALLBACK onShowMenu(HWND, UINT, UINT_PTR id, DWORD) {
     }
 }
 
+GanttHit g_radialHit;  // Stelle des offenen Rundmenüs
+POINT g_radialAt{};
+
+void onRadial(const std::wstring& command) {
+    if (!g_app) return;
+    inMenu([&] {
+        if (command == L"more") showGanttMenu(g_app.Get(), powerPointWindow(), g_radialAt, g_radialHit);
+        else ganttCommand(g_app.Get(), command, g_radialHit);
+    });
+}
+
+// Freie Stelle im Zeitbereich (keine Form, keine Beschriftung, nicht die Skala): Rundmenü für neue Elemente
+bool wantsRadial(const GanttHit& hit) { return hit.valid && hit.hasDate && !hit.inScale && hit.role.empty() && hit.label.empty(); }
+
+void showRadial(POINT at, const GanttHit& hit) {
+    const Mapping m = currentMapping();
+    const RECT plot{m.x(g_gantt.plotLeft), m.y(g_gantt.scaleTop), m.x(g_gantt.plotRight), m.y(g_gantt.rowsTop + g_gantt.rowCount * g_gantt.rowH)};
+    const bool onRow = hit.row >= engine::gantt::kFirstActivityRow;
+    g_radialHit = hit, g_radialAt = at;
+    showRadialMenu(powerPointWindow(), at, plot,
+                   {{L"new=bar", L"Balken", onRow},
+                    {L"new=pentagon", L"Prozesspfeil", onRow},
+                    {L"new=milestone", L"Meilenstein"},
+                    {L"new=bracket", L"Klammer"},
+                    {L"new=shade", L"Schattierung"},
+                    {L"more", L"Weitere Optionen …"}},
+                   onRadial);
+}
+
+// Rechtsklick ins Diagramm: Rundmenü an freien Stellen des Zeitbereichs, sonst Minileiste und Kontextmenü
+void openMenuAt(const ComPtr<IDispatch>& element, POINT at) {
+    hideRadialMenu();
+    bool radial = false;
+    GanttHit hit;
+    inMenu([&] {
+        if (!g_element || disp::call(g_element.Get(), L"Id").toLong() != disp::call(element.Get(), L"Id").toLong()) {
+            disp::call(element.Get(), L"Select");  // Rechtsklick auf einen nicht ausgewählten Zeitplan wählt ihn aus
+            g_element = element;
+            placeOverlay(true);
+        }
+        const Mapping m = currentMapping();
+        hit = ganttHitAt(element.Get(), m.pointX(at.x), m.pointY(at.y));
+        radial = wantsRadial(hit) && g_gantt.valid;
+        if (!radial) showGanttMenu(g_app.Get(), powerPointWindow(), at, hit);
+    });
+    if (radial) showRadial(at, hit);  // nicht modal: wirkt erst beim Klick auf eine Schaltfläche
+}
+
+void CALLBACK onShowMenu(HWND, UINT, UINT_PTR id, DWORD) {
+    KillTimer(nullptr, id);
+    g_menuTimer = 0;
+    ComPtr<IDispatch> element = std::move(g_menuElement);
+    if (!element || !g_app) return;
+    openMenuAt(element, g_menuAt);
+}
+
 // Rechtsklick in einen Zeitplan (ausgewählt oder nicht): PowerPoint bekommt ihn nicht, nach dem Loslassen erscheint
 // das eigene Kontextmenü. Liefert true, wenn die Nachricht verschluckt wird.
 bool rightClick(WPARAM message, const MOUSEHOOKSTRUCT* info) {
-    if (g_inMenu || g_dragging || g_acting || !g_app) return false;
+    if (g_inMenu || g_dragging || g_acting || !g_app || (info->hwnd && (info->hwnd == ganttToolbarWindow() || info->hwnd == radialMenuWindow())))
+        return false;
     const POINT p = info->pt;
     if (message == WM_RBUTTONDOWN) {
         g_menuElement.Reset();
@@ -587,7 +665,7 @@ LRESULT CALLBACK onMouse(int code, WPARAM message, LPARAM lParam) {
         return 1;
     if (code >= 0 && g_element && !g_dragging && !g_acting) {
         const auto* info = reinterpret_cast<const MOUSEHOOKSTRUCT*>(lParam);
-        if (info->hwnd != overlayWindow()) {
+        if (info->hwnd != overlayWindow() && info->hwnd != ganttToolbarWindow() && info->hwnd != radialMenuWindow()) {
             const POINT p = info->pt;
             switch (message) {
                 case WM_LBUTTONDOWN: {
@@ -866,6 +944,26 @@ GanttHit ganttHitAtCursor(IDispatch* app) {
     GetCursorPos(&cursor);
     const Mapping m = mappingOf(app);
     return ganttHitAt(element.Get(), m.pointX(cursor.x), m.pointY(cursor.y));
+}
+
+std::wstring simulateGanttRightClick(double x, double y, const std::wstring& command) {
+    if (!g_app) throw Error("Das Add-in ist nicht mit PowerPoint verbunden");
+    auto element = rethinkElementOf(disp::object(disp::object(g_app.Get(), L"ActiveWindow").Get(), L"Selection").Get());
+    if (!element || !elementInfo(element.Get()).gantt) throw Error("Bitte zuerst einen rethink-Zeitplan auswählen.");
+    g_element = element;
+    readTargets();
+    const Mapping m = currentMapping();
+    const POINT at{m.x(x), m.y(y)};
+    const GanttHit hit = ganttHitAt(element.Get(), x, y);
+    if (!wantsRadial(hit)) return L"";
+    showRadial(at, hit);
+    const std::wstring text = radialMenuText();
+    if (command.empty()) return text;
+    if (!clickRadialButton(command)) {
+        hideRadialMenu();
+        throw Error("Schaltfläche nicht verfügbar: " + narrow(command));
+    }
+    return text;
 }
 
 GanttHit ganttHitAtPoint(IDispatch* app, double x, double y) {

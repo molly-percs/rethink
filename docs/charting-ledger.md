@@ -83,6 +83,7 @@ Slide library and templates are intentionally **out of scope**.
 | Resize with the mouse re-lays out the chart | ✅ |
 | `.ppttc` fills rethink elements (`RETHINK_MODEL`) and placeholders | ✅ CLI |
 | Gantt: drag bar ends/bars/milestones in days with snapping and date tooltip, drag scale ends, calendar (double-click), context menu (rows, new items, scales, display) | ✅ (automation + real mouse tested) |
+| Gantt: mini toolbar on right-click (form, fill/outline from the slide theme, line weight, dashed bar; date label content and format; scales and formats), radial menu for new items with red crosshairs, drag rows (also into another category, datasheet follows), year-grid calendar, scale band with ◀▶ | ✅ (automation-tested; look to be checked by hand) |
 
 ## Slice plan
 

@@ -148,7 +148,9 @@ std::pair<double, double> ganttRangeDrag(const GanttAxis& axis, bool startSide, 
 }
 
 std::wstring ganttTooltip(double t, const std::wstring& language) {
-    return formatDate(t, L"ddd dd.MM.yyyy", language) + L" · " + formatDate(t, L"www", language);
+    // Datum, dahinter Wochentag und Kalenderwoche: „04.11.2026 (Mi der KW 45)“
+    return std::format(L"{} ({} {} {})", formatDate(t, language == L"en" ? L"M/d/yyyy" : L"dd.MM.yyyy", language), formatDate(t, L"ddd", language),
+                       language == L"en" ? L"of" : L"der", formatDate(t, L"www", language));
 }
 
 void setGanttRange(ChartOptions& options, double t0, double t1) {

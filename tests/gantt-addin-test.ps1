@@ -40,6 +40,8 @@ try {
     Expect ($group.Type -eq 6 -and $group.Tags.Item('RETHINK_MODEL') -match '"gantt"' -and $group.Tags.Item('RETHINK_KIND') -eq 'gantt') "Zeitplan '$name' mit Modell"
     $roles = Roles $group
     Expect ($roles -contains 'bar r2' -and $roles -contains 'milestone r3' -and $roles -contains 'milestone r1' -and $roles -contains 'activity r2' -and $roles -contains 'headline activity') 'Formen heißen nach ihrer Rolle (Balken, Meilensteine, Beschriftungen)'
+    $scheme = $slide.ThemeColorScheme
+    Expect ($group.GroupItems.Item('bar r2').Fill.ForeColor.RGB -eq $scheme.Colors(5).RGB -and $group.GroupItems.Item('milestone r3').Fill.ForeColor.RGB -eq $scheme.Colors(6).RGB) 'Farben aus dem Master: Balken Akzent 1, Meilensteine Akzent 2'
     $t = Targets $api
     $first = Get-Date -Day 1 -Hour 0 -Minute 0 -Second 0 -Millisecond 0
     $expectedRange = '{0:yyyy-MM-dd}..{1:yyyy-MM-dd}' -f $first, $first.AddMonths(3).AddDays(-1)
@@ -180,7 +182,10 @@ try {
     $api.SetGanttDates('', ('{0:yyyy-MM-dd}' -f $bar), ('{0:yyyy-MM-dd}' -f $bar.AddDays(13)))
     $roles = Roles $slide.Shapes.Item($name)
     Expect (($roles -contains 'scale day 1') -and ($roles -match '^weekend')) "zwei Wochen: Tagesskala und schattierte Wochenenden ($((Targets $api)['scales']))"
-    $api.OpenCalendar('')
+    $api.OpenCalendar('bar r2')
+    $s0 = StartOf (Targets $api) 'bar r2'
+    $sum = $api.CalendarPick(('{0:yyyy-MM-dd}' -f $s0), ('{0:yyyy-MM-dd}' -f $s0.AddDays(29)))
+    Expect ($sum -eq ('{0:dd.MM.yyyy} bis {1:dd.MM.yyyy} · 4 Wochen 2 Tage' -f $s0, $s0.AddDays(29)) -and (EndOf (Targets $api) 'bar r2') -eq $s0.AddDays(30)) "Kalender: Zeitraum wählen setzt den Balken ($sum)"
     Expect ($api.CloseCalendar()) 'Kalender öffnet und schließt'
     $api.GanttCommand('rtkG_fit')
 
@@ -240,6 +245,7 @@ try {
     Expect ((SameRow 4) -and $api.DatasheetCell(4, 0) -eq $label3) 'Zeile im Datenblatt eingefügt: frei gesetztes Element rückt mit'
     $api.DatasheetMenu(3, 'deleteRow')
     Expect ((SameRow 3) -and $api.DatasheetCell(3, 0) -eq $label3) 'Zeile im Datenblatt gelöscht: Element rückt zurück'
+    $ic = Center $slide.Shapes.Item($name).GroupItems.Item($item); $api.GanttCommand('deleteItem', $ic[0], $ic[1])
     $api.CloseDatasheet()
     $api.GanttCommand('design=modern')
     $roles = Roles $slide.Shapes.Item($name)
@@ -248,6 +254,42 @@ try {
     $api.GanttCommand('link=Konzept', $c[0], $c[1])
     Expect ((Roles $slide.Shapes.Item($name)) -match '^link r3 1 arrow$') 'Verbinden mit Vorgänger per Rechtsklick'
     $api.GanttCommand('design=standard')
+
+    # Minileiste per Rechtsklick: Balken (Form, Füllung, Linie, Stärke), Farben aus dem Design der Folie
+    $c = Center $slide.Shapes.Item($name).GroupItems.Item('bar r3')
+    $bar = $api.GanttToolbar($c[0], $c[1])
+    Expect ($bar -match '\[Balken\]' -and $bar -match '\[Füllung #' -and $bar -match 'Füllung > Akzent 2=fill=accent2' -and $bar -match 'Balken > Gestrichelter Balken=barStyle=dashed' -and $bar -match 'Füllung > Automatisch \(Master\)( \[x\])?=fill=') 'Minileiste am Balken: Form, Füllung mit Designfarben'
+    $accent2 = $slide.ThemeColorScheme.Colors(6).RGB
+    $api.GanttCommand('fill=accent2', $c[0], $c[1])
+    $api.GanttCommand('lineWeight=2.25', $c[0], $c[1])
+    $s = $slide.Shapes.Item($name).GroupItems.Item('bar r3')
+    Expect ($s.Fill.ForeColor.RGB -eq $accent2 -and $s.Line.Visible -and [math]::Abs($s.Line.Weight - 2.25) -lt 0.01) ("Füllung Akzent 2 und Linienstärke 2,25 pt (Füllung $($s.Fill.ForeColor.RGB) statt $accent2, Linie $($s.Line.Visible) $($s.Line.Weight), Stil $($s.Tags.Item('RETHINK_STYLE')), " + [regex]::Match($slide.Shapes.Item($name).Tags.Item('RETHINK_MODEL'), '"rowStyles":[^\]]*\]').Value + ')')
+    $api.GanttCommand('barStyle=dashed', $c[0], $c[1])
+    $s = $slide.Shapes.Item($name).GroupItems.Item('bar r3')
+    Expect (-not $s.Fill.Visible -and $s.Line.DashStyle -ne 1) 'Gestrichelter Balken: nur gestrichelter Umriss'
+    $api.GanttCommand('barStyle=solid', $c[0], $c[1])
+    Expect ($slide.Shapes.Item($name).GroupItems.Item('bar r3').Fill.ForeColor.RGB -eq $accent2) 'wieder durchgezogen, Füllung bleibt'
+    $api.GanttCommand('rowUp', $c[0], $c[1])
+    Expect ($slide.Shapes.Item($name).GroupItems.Item('bar r2').Fill.ForeColor.RGB -eq $accent2) 'Aussehen wandert mit der Zeile'
+    $ms = @(Roles $slide.Shapes.Item($name) | Where-Object { $_ -match '^milestone r\d+$' })[0]
+    $m = Center $slide.Shapes.Item($name).GroupItems.Item($ms)
+    Expect (($api.GanttToolbar($m[0], $m[1])) -match 'Datum > Datum zeigen') 'Minileiste am Meilenstein: Form, Farben, Datum'
+    $sc = Center $slide.Shapes.Item($name).GroupItems.Item(@(Roles $slide.Shapes.Item($name) | Where-Object { $_ -match '^scale ' })[0])
+    Expect (($api.GanttToolbar($sc[0], $sc[1])) -match '\[Skalen\]' -and ($api.GanttToolbar($sc[0], $sc[1])) -match 'Format > Monat > ') 'Minileiste an der Skala: Skalen und Format'
+
+    # Rundmenü: Rechtsklick auf eine freie Stelle im Zeitbereich, neues Element an genau dieser Stelle
+    $api.GanttCommand('insertRow')
+    $g = $slide.Shapes.Item($name)
+    $last = @(Roles $g | Where-Object { $_ -match '^activity r\d+$' } | ForEach-Object { [int]($_ -replace '\D', '') } | Sort-Object)[-1]
+    $geo = $g.Tags.Item('RETHINK_GANTT') -split ';' | ForEach-Object { [double]::Parse($_, [Globalization.CultureInfo]::InvariantCulture) }
+    $lx = ($geo[0] + $geo[1]) / 2; $ly = (Center $g.GroupItems.Item("activity r$last"))[1]
+    $radial = $api.GanttRightClick($lx, $ly, '')
+    Expect ($radial -match 'Balken=new=bar' -and $radial -match 'Meilenstein=new=milestone' -and $radial -notmatch '\(aus\)') 'Rundmenü an einer freien Stelle der Zeile'
+    [void]$api.GanttRightClick($lx, $ly, 'new=bar')
+    $t = Targets $api
+    Expect ($t.ContainsKey("bar r$last")) "Rundmenü: neuer Balken an der Stelle ($($t["bar r$last"]))"
+    $bc = Center $slide.Shapes.Item($name).GroupItems.Item("bar r$last")
+    Expect ($api.GanttRightClick($bc[0], $bc[1], '') -eq '') 'auf einem Balken kein Rundmenü (dort Minileiste und Menü)'
 
     # 15. Bild
     $slide.Export((Join-Path $OutDir 'slide1.png'), 'PNG', 1600, 900)

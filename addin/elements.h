@@ -113,6 +113,7 @@ struct GanttHit {
     double date = 0;      // Tage seit 1970
     bool hasDate = false;
     std::string role;     // ziehbare Form unter dem Punkt (leer = keine)
+    std::string label;    // Datumsbeschriftung unter dem Punkt ("bar r2 label", "milestone label r3" …), wenn keine Form
     bool inScale = false; // im Band der Kalenderskalen
 };
 GanttHit ganttHitAt(IDispatch* element, double x, double y);
@@ -123,7 +124,8 @@ GanttHit ganttHitAt(IDispatch* element, double x, double y);
 // "categoryStyle=block", "categoryColors=1", "links=1", "link=Analyse" (Vorgänger der Zeile umschalten), "rowShape=chevron",
 // "rowMarker=star", "barShape=rounded", "milestoneShape=circle", "rowShade=1", "insertRow", "duplicateRow", "deleteRow",
 // "rowUp", "rowDown", "moveRow=5" (Zeile an Index 5, übernimmt dort die Kategorie), "new=bar|milestone|bracket|shade|pentagon|chevron", "deleteItem", "fit", "calendar", "datasheet",
-// "sortCategories" (Dialog) bzw. "sortCategories=Bau|Planung". Die IDs des PowerPoint-Kontextmenüs (rtkG_…) gehen auch.
+// "sortCategories" (Dialog) bzw. "sortCategories=Bau|Planung". Aussehen der angeklickten Form (Minileiste): "fill=accent2",
+// "line=#C00000", "fill=none", "fill=" (Vorgabe), "lineWeight=0.75", "dashed=1", "barStyle=dashed|solid". Die IDs des PowerPoint-Kontextmenüs (rtkG_…) gehen auch.
 void ganttCommand(IDispatch* app, const std::wstring& command, const GanttHit& hit);
 // Umschalter des PowerPoint-Kontextmenüs (z. B. "rtkT_separators"): Zustand lesen bzw. setzen.
 bool ganttPressed(IDispatch* app, const std::wstring& id, const GanttHit& hit);
@@ -145,6 +147,11 @@ struct GanttState {
     std::wstring rowShape, rowMarker;      // Spalten 8/9 der Zeile unter der Maus (kanonisch, leer = Vorgabe)
     std::vector<std::wstring> rowLinks;    // Vorgänger der Zeile
     bool rowShaded = false;
+    engine::ShapeStyle targetStyle;        // gespeichertes Aussehen der Form unter der Maus (leer = Vorgabe)
+    long targetFill = -1, targetLine = -1; // wie gezeichnet (RGB wie PowerPoint, -1 = keine)
+    double targetWeight = 0;
+    std::vector<std::pair<std::wstring, long>> theme;  // Designfarben der Folie: tx1, bg1, tx2, bg2, accent1 … accent6
+    std::wstring defaultFill;              // Vorgabefarbe der Form unter der Maus (Designfarbe des Masters, z. B. "accent2")
     double today = 0;
     std::wstring language;
 };

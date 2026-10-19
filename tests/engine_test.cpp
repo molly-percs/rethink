@@ -368,7 +368,19 @@ void testGanttLayout() {
     check(keyMark && keyDate && keyDate->y >= keyMark->y + keyMark->h && std::llabs(keyDate->x + keyDate->w / 2 - (keyMark->x + keyMark->w / 2)) <= 1,
           "Standard: Datum mittig unter dem ▲ der Meilensteinzeile");
     check(keyLine && keyLine->dashed && keyLine->y == find(d, "frame left")->y, "Standard: gestrichelte Meilensteinlinie bis zur Oberkante");
-    check(find(d, "bar r2") && find(d, "bar r2")->fill.scheme == L"tx1", "Standard: Balken in Textfarbe (schwarz) wie im Original");
+    check(find(d, "bar r2") && find(d, "bar r2")->fill.scheme == L"accent1", "Standard: Balken in der ersten Akzentfarbe des Masters");
+    check(find(d, "milestone r3") && find(d, "milestone r3")->fill.scheme == L"accent2", "Standard: Meilensteine in der zweiten Akzentfarbe");
+    {
+        // jede Elementart in einer eigenen Designfarbe des Masters
+        ChartOptions kinds = ganttOptions();
+        kinds.gantt.items = {{GanttItem::Kind::Pentagon, 4, L"2026-12-14", L"2026-12-21"},
+                             {GanttItem::Kind::Bracket, 2, L"2026-11-02", L"2026-11-27"},
+                             {GanttItem::Kind::Shade, 0, L"2026-12-21", L"2027-01-04"}};
+        const Drawing k = layoutChart(item, kinds, box);
+        check(find(k, "item 0") && find(k, "item 0")->fill.scheme == L"accent3" && find(k, "item 1") && find(k, "item 1")->stroke.scheme == L"accent4" &&
+                  find(k, "item 2") && find(k, "item 2")->fill.scheme == L"accent1" && find(k, "item 2")->fill.brightness > 0.5,
+              "Farben je Art: Prozesspfeil accent3, Klammer accent4, Schattierung helles accent1");
+    }
     {
         ChartOptions lang = ganttOptions();
         lang.gantt.dateFormat.clear();
@@ -594,7 +606,8 @@ void testGanttEdit() {
     check(t0 == *parseIsoDate(L"2026-10-19") && t1 == axis.t1, "Skala links ziehen: Wochenraster");
     const auto [u0, u1] = ganttRangeDrag(axis, false, -perDay * 200, TimeUnit::Month);
     check(u0 == axis.t0 && u1 == *parseIsoDate(L"2026-12-01"), "Skala rechts zu weit: mindestens eine Einheit bleibt");
-    check(ganttTooltip(*parseIsoDate(L"2026-11-04"), L"de") == L"Mi 04.11.2026 · KW 45", "Kurzinfo beim Ziehen");
+    check(ganttTooltip(*parseIsoDate(L"2026-11-04"), L"de") == L"04.11.2026 (Mi der KW 45)", "Kurzinfo beim Ziehen");
+    check(ganttTooltip(*parseIsoDate(L"2026-11-04"), L"en") == L"11/4/2026 (Wed of Week 45)", "Kurzinfo beim Ziehen (englisch)");
 
     ChartOptions fit = o;
     check(fitGanttRange(item, fit) && fit.gantt.start == L"2026-11-03" && fit.gantt.end == L"2027-01-28", "Skala an Daten anpassen");

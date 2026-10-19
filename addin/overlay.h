@@ -28,6 +28,7 @@ enum class HandleStyle {
     Grip,       // schmaler Griff an einem Balkenende
     Hidden,     // unsichtbare Fläche (Balken/Meilenstein verschieben)
     Arrow,      // Pfeil am Skalenende
+    DoubleArrow,// ◀▶ am Ende des blauen Skalenbands (Skala ausgewählt oder Bereich wird gezogen)
     Datasheet,  // Tabellensymbol
 };
 
@@ -47,6 +48,7 @@ struct OverlayContent {
     std::wstring tooltip;  // Kurzinfo beim Ziehen (z. B. Datum)
     POINT tooltipAt{};     // Bildschirmpunkt (Mitte unten der Kurzinfo)
     RECT marker{};         // blaue Einfügelinie beim Ziehen einer Zeile (leer = keine)
+    RECT band{};           // blaues Band über der Skala (leer = keins)
 };
 
 // Geste an einem Griff. Ein Griff wird geklickt (Loslassen ohne Bewegung) oder gezogen: Drag kommt bei jeder

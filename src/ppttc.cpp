@@ -219,10 +219,17 @@ void checkDate(const std::wstring& value, const std::string& where, const char* 
 // Schlüssel vorhanden und nicht null (null = Vorgabe des Designs)
 bool present(const JsonObject& o, const wchar_t* key) { return o.HasKey(key) && o.GetNamedValue(key).ValueType() != JsonValueType::Null; }
 
-// Farbe einer Stilangabe: Designfarbe, "#RRGGBB" oder "none"
-void checkStyleColor(const std::wstring& value, const std::string& where) {
+}  // namespace
+
+bool isStyleColor(const std::wstring& value) {
     static const std::wregex kTheme(LR"(^(tx1|tx2|bg1|bg2|accent[1-6]|none|#[0-9A-Fa-f]{6})$)");
-    if (!value.empty() && !std::regex_match(value, kTheme))
+    return value.empty() || std::regex_match(value, kTheme);
+}
+
+namespace {
+
+void checkStyleColor(const std::wstring& value, const std::string& where) {
+    if (!isStyleColor(value))
         fail(where, "Farbe muss eine Designfarbe (tx1, bg1, tx2, bg2, accent1 … accent6), \"#rrggbb\" oder \"none\" sein");
 }
 

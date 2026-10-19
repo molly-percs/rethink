@@ -82,9 +82,12 @@ enum : DISPID {
     kGanttHit,
     kOpenCalendar,
     kCloseCalendar,
+    kCalendarPick,
     kRibbonStatus,
     kActivateTab,
     kGanttMenu,
+    kGanttToolbar,
+    kGanttRightClick,
 };
 
 struct Member {
@@ -106,8 +109,8 @@ constexpr Member kMembers[] = {
     {L"RethinkGanttAction", kOnGanttAction}, {L"RethinkGanttToggle", kOnGanttToggle}, {L"RethinkGanttPressed", kOnGanttPressed},
     {L"InsertElement", kInsertElement}, {L"GanttTargets", kGanttTargets}, {L"GanttDrag", kGanttDrag}, {L"GanttCommand", kGanttCommand},
     {L"GanttToggle", kGanttToggle}, {L"GanttPressed", kGanttPressed}, {L"SetGanttDates", kSetGanttDates}, {L"GanttHit", kGanttHit},
-    {L"OpenCalendar", kOpenCalendar}, {L"CloseCalendar", kCloseCalendar}, {L"RethinkRibbonLoad", kOnRibbonLoad},
-    {L"RibbonStatus", kRibbonStatus}, {L"ActivateTab", kActivateTab}, {L"GanttMenu", kGanttMenu},
+    {L"OpenCalendar", kOpenCalendar}, {L"CloseCalendar", kCloseCalendar}, {L"CalendarPick", kCalendarPick}, {L"RethinkRibbonLoad", kOnRibbonLoad},
+    {L"RibbonStatus", kRibbonStatus}, {L"ActivateTab", kActivateTab}, {L"GanttMenu", kGanttMenu}, {L"GanttToolbar", kGanttToolbar}, {L"GanttRightClick", kGanttRightClick},
 };
 
 // Kontextmenü „rethink-Zeitplan“ (im Original: Kontextmenüs von Zeilen, Elementen und Skalen). Steuerelement-IDs
@@ -259,8 +262,9 @@ GanttHit hitArg(IDispatch* app, const DISPPARAMS* params, UINT index) {
 }
 
 std::wstring hitText(const GanttHit& h) {
-    return std::format(L"gueltig={} zeile={} datum={} element={} skala={}", h.valid, h.row, h.hasDate ? engine::isoDate(h.date) : L"-",
-                       h.role.empty() ? L"-" : widen(h.role), h.inScale);
+    return std::format(L"gueltig={} zeile={} datum={} element={} skala={} beschriftung={}", h.valid, h.row, h.hasDate ? engine::isoDate(h.date) : L"-",
+                       h.role.empty() ? L"-" : widen(h.role), h.inScale,
+                       h.label.empty() ? L"-" : widen(h.label));
 }
 
 template <class F>
@@ -488,8 +492,21 @@ public:
                 setGanttDates(app_.Get(), narrow(stringArg(params, 0, true)), stringArg(params, 1, false), stringArg(params, 2, true));
                 return S_OK;
             case kGanttMenu: setString(result, ganttMenuText(app_.Get(), hitArg(app_.Get(), params, 0))); return S_OK;
+            case kGanttRightClick:
+                setString(result, simulateGanttRightClick(doubleArg(params, 0), doubleArg(params, 1), stringArg(params, 2, true)));
+                return S_OK;
+            case kGanttToolbar: setString(result, ganttToolbarText(app_.Get(), hitArg(app_.Get(), params, 0))); return S_OK;
             case kGanttHit: setString(result, hitText(ganttHitAtPoint(app_.Get(), doubleArg(params, 0), doubleArg(params, 1)))); return S_OK;
             case kOpenCalendar: openGanttCalendar(app_.Get(), narrow(stringArg(params, 0, true))); return S_OK;
+            case kCalendarPick: {
+                // Auswahl wie mit der Maus (ISO-Daten, beide eingeschlossen); liefert die Zusammenfassung danach
+                const auto first = engine::parseIsoDate(stringArg(params, 0, false)), last = engine::parseIsoDate(stringArg(params, 1, true));
+                if (!first) throw Error("Datum als JJJJ-MM-TT erwartet");
+                const std::wstring summary = calendarSummary();
+                calendarPick(*first, last.value_or(*first));
+                setString(result, calendarWindowOpen() ? calendarSummary() : summary);
+                return S_OK;
+            }
             case kCloseCalendar: setBool(result, nullptr, calendarWindowOpen()); closeCalendarWindow(); return S_OK;
             case kActivateTab:
                 if (!ribbon_) throw Error("Das Ribbon wurde nicht geladen (Ribbon-XML abgelehnt?)");

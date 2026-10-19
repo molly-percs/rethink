@@ -48,6 +48,8 @@ std::wstring serializeDataItem(const DataItem& item);
 
 // Schlüssel aus `override_` überschreiben die von `stored` (flach, je Schlüssel).
 std::wstring mergeChartJson(const std::wstring& stored, const std::wstring& override_);
+// Farbe einer Stilangabe: leer, Designfarbe (tx1, bg1, tx2, bg2, accent1 … accent6), "#rrggbb" oder "none"
+bool isStyleColor(const std::wstring& value);
 
 }  // namespace rethink
 

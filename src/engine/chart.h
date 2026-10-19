@@ -176,6 +176,7 @@ struct GanttLook {
     std::wstring barShape, marker;  // kanonische Namen
     CategoryStyle categoryStyle = CategoryStyle::Bracket;
     bool categoryColors = false, separators = true, rowSeparators = false, milestoneLines = false;
+    std::wstring bar, milestone, process, bracket, shade;  // Vorgabefarben je Art (Designfarben des Masters, z. B. "accent1")
 };
 GanttLook ganttLook(const GanttOptions& options);
 
