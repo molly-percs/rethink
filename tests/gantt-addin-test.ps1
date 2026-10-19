@@ -338,6 +338,32 @@ try {
     Expect (-not ((Roles $slide.Shapes.Item($name)) -match '^line date')) 'Datumslinie noch einmal: entfernt'
     $slide.Shapes.Item($name).Select()
 
+    # Beschriftungszellen direkt im Diagramm bearbeiten (Eingabefeld über der Zelle, Enter übernimmt)
+    $g = $slide.Shapes.Item($name); $g.Select(); Start-Sleep -Milliseconds 500
+    function Columns() {
+        $g = $slide.Shapes.Item($name); $t = $g.Tags.Item('RETHINK_GANTT') -split ';'
+        $l = $g.Tags.Item('RETHINK_LAYOUT') -split ';' | ForEach-Object { [double]::Parse($_, $inv) }
+        @(0..([int]$t[8] - 1) | ForEach-Object { [pscustomobject]@{ Col = [int]$t[9 + 3 * $_]; X = [double]::Parse($t[10 + 3 * $_], $inv) + $g.Left - $l[4]; W = [double]::Parse($t[11 + 3 * $_], $inv) } })
+    }
+    $cols = Columns; $act = $cols | Where-Object Col -eq 0; $cat = $cols | Where-Object Col -eq 6
+    Expect ($act -and $cat) 'Aktivitäts- und Kategoriespalte vorhanden'
+    $api.OpenDatasheet($false)
+    $r = $api.GanttEditCell($act.X + $act.W / 2, $rowsTop + $rowH / 2, 'Analyse neu')
+    Expect ($r -eq 'Analyse neu' -and $slide.Shapes.Item($name).GroupItems.Item('activity r2').TextFrame.TextRange.Text -eq 'Analyse neu' -and $api.DatasheetCell(2, 0) -eq 'Analyse neu') "Aktivität im Diagramm bearbeitet: Beschriftung und Datenblatt folgen ($r)"
+    $r = $api.GanttEditCell($cat.X + $cat.W / 2, $rowsTop + 1.5 * $rowH, 'Prüfung')
+    Expect ($r -eq 'Prüfung' -and $api.DatasheetCell(3, 6) -eq 'Prüfung') "Kategoriezelle der angeklickten Zeile bearbeitet ($r)"
+    $r = $api.GanttEditCell($act.X + $act.W / 2, $rowsTop + $rowH / 2, 'A|B|C')
+    Expect ($r -eq 'A|B|C' -and $api.DatasheetCell(2, 0) -eq 'A|B|C') 'Text mit „|“ bleibt ganz'
+    $api.GanttCommand('column:remark=1')
+    $cols = Columns; $rem = $cols | Where-Object Col -eq 5
+    Expect ($rem -and $rem.W -ge 40) "frisch eingeschaltete, leere Spalte „Bemerkung“ ist breit genug ($([int]$rem.W) pt)"
+    $r = $api.GanttEditCell($rem.X + $rem.W / 2, $rowsTop + $rowH / 2, 'Hinweis')
+    Expect ($r -eq 'Hinweis' -and ((Roles $slide.Shapes.Item($name)) -contains 'remark r2') -and $api.DatasheetCell(2, 5) -eq 'Hinweis') 'Eintrag in leerer Spalte erscheint im Diagramm und im Datenblatt'
+    $api.GanttCommand('cell=2|0|Analyse')
+    Expect ($api.DatasheetCell(2, 0) -eq 'Analyse') 'Befehl cell=Zeile|Spalte|Text'
+    $api.CloseDatasheet()
+    $slide.Shapes.Item($name).Select()
+
     # 15. Bild
     $slide.Export((Join-Path $OutDir 'slide1.png'), 'PNG', 1600, 900)
     if ($KeepOpen) { $slide.Shapes.Item($name).Select() }

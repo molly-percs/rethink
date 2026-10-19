@@ -1555,6 +1555,29 @@ std::vector<std::wstring> ganttRowCategories(IDispatch* element) {
     return result;
 }
 
+GanttCellInfo ganttCellInfo(IDispatch* element, int row, int col) {
+    const std::wstring stored = tagValue(element, kModelTag);
+    const auto [item, options] = onWorker([&] {
+        DataItem parsed = parseDataItemJson(stored);
+        ChartOptions o = optionsOf(parsed);
+        return std::pair{std::move(parsed), std::move(o)};
+    });
+    GanttCellInfo info;
+    info.fontPt = options.fontPt;
+    if (row >= 0 && static_cast<size_t>(row) < item.table.size() && col >= 0 && static_cast<size_t>(col) < item.table[row].size())
+        info.text = cellText(item.table[row][col]);
+    return info;
+}
+
+void ganttSetCell(IDispatch* app, IDispatch* element, int row, int col, const std::wstring& text) {
+    if (col != gantt::kLabelCol && col != gantt::kResponsibleCol && col != gantt::kRemarkCol && col != gantt::kCategoryCol)
+        throw Error("Diese Spalte lässt sich im Diagramm nicht bearbeiten.");
+    modifyGantt(app, element, [&](DataItem& item, ChartOptions&) {
+        if (row < gantt::kFirstActivityRow || static_cast<size_t>(row) >= item.table.size()) throw std::invalid_argument("Diese Zeile gibt es nicht.");
+        setGanttText(item, row, col, text);
+    });
+}
+
 std::wstring beginGanttDrag(IDispatch* app, const std::string& role, int grip, double pointsPerPixel) {
     g_ganttDrag.reset();
     auto element = selectedGantt(app);
@@ -1968,6 +1991,17 @@ void ganttCommand(IDispatch* app, const std::wstring& command, const GanttHit& h
         // Zeile an eine andere Stelle ziehen (Overlay): übernimmt dort die Kategorie, Datenblatt und Excel folgen
         const int row = requireRow(hit), target = std::stoi(value);
         modifyGantt(app, e, [&](DataItem& item, ChartOptions& o) { moveGanttRowTo(item, o, row, target); });
+    } else if (key == L"cell") {
+        // cell=<Zeile>|<Spalte>|<Text>: nur an den ersten beiden '|' trennen, der Text darf selbst '|' enthalten
+        const size_t a = value.find(L'|'), b = a == std::wstring::npos ? a : value.find(L'|', a + 1);
+        int row = 0, col = 0;
+        bool ok = b != std::wstring::npos;
+        if (ok) {
+            const std::string r = narrow(value.substr(0, a)), c = narrow(value.substr(a + 1, b - a - 1));
+            ok = std::from_chars(r.data(), r.data() + r.size(), row).ec == std::errc() && std::from_chars(c.data(), c.data() + c.size(), col).ec == std::errc();
+        }
+        if (!ok) throw Error("cell=<Zeile>|<Spalte>|<Text> erwartet");
+        ganttSetCell(app, e, row, col, value.substr(b + 1));
     } else if (key == L"rowLine") {
         // Waagerechte Trennlinie an der Oberkante der Zeile umschalten (aus dem Rechtsklick auf die Grenze oder explizit)
         const std::string text = narrow(value);

@@ -39,5 +39,8 @@ std::wstring simulateGanttRightClick(double x, double y, const std::wstring& com
 // Für Tests: Maus über einem Folienpunkt des ausgewählten Zeitplans. Liefert die hervorgehobene Grenze ("waagerecht zeile=3 band=…",
 // "senkrecht datum=2026-11-09 band=…") und den leuchtenden Griff ("griff=zelle r2 c0"), durch "; " getrennt; leer = nichts.
 std::wstring simulateGanttHover(double x, double y);
+// Für Tests: öffnet das Eingabefeld der Beschriftungszelle an einem Folienpunkt wie ein Klick, setzt den Text, bestätigt wie Enter
+// und liefert den Zelltext danach.
+std::wstring simulateGanttEditCell(double x, double y, const std::wstring& text);
 
 }  // namespace rethink::addin

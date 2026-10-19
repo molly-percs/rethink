@@ -107,6 +107,15 @@ struct GanttGeometry {
 GanttGeometry ganttGeometryOf(IDispatch* element);
 // Kategorie je Aktivitätszeile (Index 0 = "table"-Zeile 2; leer ohne Kategorie) aus dem gespeicherten Modell.
 std::vector<std::wstring> ganttRowCategories(IDispatch* element);
+// Text einer Beschriftungszelle ("table"-Zeile/-Spalte) und Schriftgröße des Diagramms (pt) für das Eingabefeld.
+struct GanttCellInfo {
+    std::wstring text;
+    double fontPt = 12;
+};
+GanttCellInfo ganttCellInfo(IDispatch* element, int row, int col);
+// Schreibt Text in eine Beschriftungszelle (Aktivität, Verantwortlich, Bemerkung, Kategorie) eines Aktivitätszeile; das
+// eingebaute Datenblatt und Excel folgen. Gleiche Wirkung wie der Befehl "cell=<Zeile>|<Spalte>|<Text>".
+void ganttSetCell(IDispatch* app, IDispatch* element, int row, int col, const std::wstring& text);
 
 // Ziehen am ausgewählten Zeitplan. grip: 0 = Anfang, 1 = Ende, 2 = verschieben; role "range" = sichtbarer Bereich
 // (grip 0/1). pointsPerPixel: Folienpunkte je Bildschirmpixel (Rasterung: nicht feiner als ~3 Pixel).
@@ -140,7 +149,7 @@ GanttHit ganttHitAt(IDispatch* element, double x, double y, double tolerance = 3
 // "scale:day=1", "scales=auto", "format:month=MMM", "dateFormat=dd.MM.yy", "barLabels=range", "column:category=1",
 // "categoryStyle=block", "categoryColors=1", "links=1", "link=Analyse" (Vorgänger der Zeile umschalten), "rowShape=chevron",
 // "rowMarker=star", "barShape=rounded", "milestoneShape=circle", "rowShade=1", "insertRow", "duplicateRow", "deleteRow",
-// "rowUp", "rowDown", "moveRow=5" (Zeile an Index 5, übernimmt dort die Kategorie), "new=bar|milestone|bracket|shade|pentagon|chevron", "deleteItem", "fit", "calendar", "datasheet",
+// "cell=2|0|Text" (Beschriftungszelle), "rowLine=4", "dateLine=2026-11-09" (Trennlinien umschalten), "rowUp", "rowDown", "moveRow=5" (Zeile an Index 5, übernimmt dort die Kategorie), "new=bar|milestone|bracket|shade|pentagon|chevron", "deleteItem", "fit", "calendar", "datasheet",
 // "sortCategories" (Dialog) bzw. "sortCategories=Bau|Planung". Aussehen der angeklickten Form (Minileiste): "fill=accent2",
 // "line=#C00000", "fill=none", "fill=" (Vorgabe), "lineWeight=0.75", "dashed=1", "barStyle=dashed|solid". Die IDs des PowerPoint-Kontextmenüs (rtkG_…) gehen auch.
 void ganttCommand(IDispatch* app, const std::wstring& command, const GanttHit& hit);

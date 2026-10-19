@@ -77,7 +77,10 @@ bool g_inMenu = false;
 RECT g_hoverLine{};
 std::wstring g_hoverText;
 
+void closeEditor(bool commit, int move);
+
 void stopTracking() {
+    closeEditor(false, 0);  // offenes Eingabefeld einer Zelle verwerfen
     g_follow = Follow::None;
     g_element.Reset();
     g_segments.clear();
@@ -299,6 +302,8 @@ bool sameContent(const OverlayContent& a, const OverlayContent& b) {
 
 void onOverlayAction(const OverlayHandle& handle, OverlayGesture gesture, int pixels, bool shift);
 void updateLineHover(POINT p);
+void openCellEditor(const OverlayHandle& handle);
+void closeEditor(bool commit, int move);
 
 void readTargets() {
     g_info = elementInfo(g_element.Get());
@@ -555,6 +560,7 @@ void onOverlayAction(const OverlayHandle& handle, OverlayGesture gesture, int pi
                 adjustSegment(g_app.Get(), handle.row, handle.column, handle.action == OverlayAction::Up ? 1 : -1, shift);
                 if (g_element) placeOverlay(true);
                 break;
+            case OverlayAction::CellEdit: openCellEditor(handle); break;  // Klick in eine Zelle: dort tippen
             case OverlayAction::GanttMove:
                 // Klick auf einen Balken/Meilenstein wählt ihn aus (wie PowerPoints zweiter Klick in eine Gruppe)
                 if (g_element) selectInnerShape(g_element.Get(), handle.role);
@@ -616,7 +622,90 @@ void inMenu(F&& body) {
     }
 }
 
+// ---- Eingabe direkt in einer Beschriftungszelle ----
+// Ein randloses EDIT-Fenster (Besitzer: PowerPoint) genau über der Zelle. Enter übernimmt, Tab übernimmt und springt zur
+// nächsten Beschriftungsspalte der Zeile (Umschalt+Tab zur vorigen), Esc verwirft, Fokusverlust übernimmt.
+constexpr UINT kMsgEditorDone = WM_APP + 60;  // wParam = 1 übernehmen / 0 verwerfen, lParam = Sprung (-1, 0, +1)
+
+struct Editor {
+    HWND hwnd = nullptr;
+    WNDPROC oldProc = nullptr;
+    HFONT font = nullptr;
+    int row = 0, col = 0;
+    std::wstring original;
+    bool closing = false;
+};
+Editor g_editor;
+
+LRESULT CALLBACK editorProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    switch (message) {
+        case WM_KEYDOWN:
+            if (wParam == VK_RETURN) return PostMessageW(hwnd, kMsgEditorDone, 1, 0), 0;
+            if (wParam == VK_TAB) return PostMessageW(hwnd, kMsgEditorDone, 1, (GetKeyState(VK_SHIFT) & 0x8000) ? -1 : 1), 0;
+            if (wParam == VK_ESCAPE) return PostMessageW(hwnd, kMsgEditorDone, 0, 0), 0;
+            break;
+        case WM_CHAR:
+            if (wParam == VK_RETURN || wParam == VK_TAB || wParam == VK_ESCAPE) return 0;  // kein Signalton
+            break;
+        case WM_KILLFOCUS:
+            if (!g_editor.closing) PostMessageW(hwnd, kMsgEditorDone, 1, 0);  // Fokusverlust übernimmt
+            break;
+        case kMsgEditorDone: closeEditor(wParam != 0, static_cast<int>(lParam)); return 0;
+    }
+    return CallWindowProcW(g_editor.oldProc, hwnd, message, wParam, lParam);
+}
+
+void openCellEditor(const OverlayHandle& handle) {
+    if (!g_app || !g_element) return;
+    closeEditor(true, 0);
+    const GanttCellInfo info = ganttCellInfo(g_element.Get(), handle.row, handle.column);
+    const RECT cell = IsRectEmpty(&handle.cell) ? handle.rect : handle.cell;
+    const int width = std::max<int>(cell.right - cell.left, scaled(60)), height = cell.bottom - cell.top;
+    const int fontPx = std::max(8, static_cast<int>(std::lround(info.fontPt * std::fabs(g_overlayMap.ax))));  // Schriftgröße × Zoom
+    g_editor = {};
+    g_editor.row = handle.row, g_editor.col = handle.column, g_editor.original = info.text;
+    g_editor.hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, L"EDIT", info.text.c_str(), WS_POPUP | WS_VISIBLE | ES_AUTOHSCROLL | ES_LEFT, cell.left, cell.top, width,
+                                    height, powerPointWindow(), nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!g_editor.hwnd) return;
+    g_editor.font = CreateFontW(-fontPx, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                DEFAULT_PITCH, L"Segoe UI");
+    SendMessageW(g_editor.hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(g_editor.font), TRUE);
+    SendMessageW(g_editor.hwnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(fontPx / 3, fontPx / 3));
+    g_editor.oldProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(g_editor.hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(editorProc)));
+    SetFocus(g_editor.hwnd);
+    SendMessageW(g_editor.hwnd, EM_SETSEL, 0, -1);  // alles markiert: Tippen ersetzt
+}
+
+// Eingabefeld schließen; commit übernimmt den Text in die Zelle (nur bei Änderung), move springt zur Nachbarspalte derselben Zeile.
+void closeEditor(bool commit, int move) {
+    if (!g_editor.hwnd || g_editor.closing) return;
+    g_editor.closing = true;
+    const int length = GetWindowTextLengthW(g_editor.hwnd);
+    std::wstring text(static_cast<size_t>(length) + 1, L'\0');
+    text.resize(static_cast<size_t>(GetWindowTextW(g_editor.hwnd, text.data(), length + 1)));
+    const int row = g_editor.row, col = g_editor.col;
+    const bool changed = commit && text != g_editor.original;
+    DestroyWindow(g_editor.hwnd);
+    if (g_editor.font) DeleteObject(g_editor.font);
+    g_editor = {};
+    if (!g_app || !g_element) return;
+    if (changed) {
+        ComPtr<IDispatch> element = g_element;
+        inMenu([&] { ganttSetCell(g_app.Get(), element.Get(), row, col, text); });
+    }
+    if (move == 0 || !g_element || !g_gantt.valid) return;
+    for (size_t i = 0; i < g_gantt.columns.size(); ++i) {
+        if (g_gantt.columns[i].col != col) continue;
+        const long next = static_cast<long>(i) + move;
+        if (next < 0 || next >= static_cast<long>(g_gantt.columns.size())) return;
+        for (auto& h : g_shown.handles)
+            if (h.action == OverlayAction::CellEdit && h.row == row && h.column == g_gantt.columns[next].col) return openCellEditor(h);
+        return;
+    }
+}
+
 GanttHit g_radialHit;  // Stelle des offenen Rundmenüs
+
 POINT g_radialAt{};
 
 void onRadial(const std::wstring& command) {
@@ -1076,6 +1165,25 @@ std::wstring simulateGanttHover(double x, double y) {
     if (!b.text.empty()) text = std::format(L"{} band={},{},{},{}", b.text, b.band.left, b.band.top, b.band.right, b.band.bottom);
     if (handle) text += (text.empty() ? L"" : L"; ") + std::format(L"griff={} {}", actionName(handle->action), handle->role.empty() ? std::format(L"r{} c{}", handle->row, handle->column) : widen(handle->role));
     return text;
+}
+
+std::wstring simulateGanttEditCell(double x, double y, const std::wstring& text) {
+    if (!g_app) throw Error("Das Add-in ist nicht mit PowerPoint verbunden");
+    auto element = rethinkElementOf(disp::object(disp::object(g_app.Get(), L"ActiveWindow").Get(), L"Selection").Get());
+    if (!element || !elementInfo(element.Get()).gantt) throw Error("Bitte zuerst einen rethink-Zeitplan auswählen.");
+    g_element = element;
+    placeOverlay(true);
+    const POINT at{g_overlayMap.x(x), g_overlayMap.y(y)};
+    const OverlayHandle* found = nullptr;
+    for (auto& h : g_shown.handles)
+        if (h.action == OverlayAction::CellEdit && PtInRect(&h.rect, at)) found = &h;
+    if (!found) throw Error("Dort gibt es keine Zelle zum Bearbeiten.");
+    const OverlayHandle handle = *found;
+    openCellEditor(handle);  // wie ein Klick
+    if (!g_editor.hwnd) throw Error("Das Eingabefeld ließ sich nicht öffnen.");
+    SetWindowTextW(g_editor.hwnd, text.c_str());
+    closeEditor(true, 0);  // wie Enter
+    return ganttCellInfo(g_element.Get(), handle.row, handle.column).text;
 }
 
 GanttHit ganttHitAtPoint(IDispatch* app, double x, double y) {

@@ -89,6 +89,7 @@ enum : DISPID {
     kGanttToolbar,
     kGanttRightClick,
     kGanttHover,
+    kGanttEditCell,
 };
 
 struct Member {
@@ -112,7 +113,7 @@ constexpr Member kMembers[] = {
     {L"GanttToggle", kGanttToggle}, {L"GanttPressed", kGanttPressed}, {L"SetGanttDates", kSetGanttDates}, {L"GanttHit", kGanttHit},
     {L"OpenCalendar", kOpenCalendar}, {L"CloseCalendar", kCloseCalendar}, {L"CalendarPick", kCalendarPick}, {L"RethinkRibbonLoad", kOnRibbonLoad},
     {L"RibbonStatus", kRibbonStatus}, {L"ActivateTab", kActivateTab}, {L"GanttMenu", kGanttMenu}, {L"GanttToolbar", kGanttToolbar}, {L"GanttRightClick", kGanttRightClick},
-    {L"GanttHover", kGanttHover},
+    {L"GanttHover", kGanttHover}, {L"GanttEditCell", kGanttEditCell},
 };
 
 // Kontextmenü „rethink-Zeitplan“ (im Original: Kontextmenüs von Zeilen, Elementen und Skalen). Steuerelement-IDs
@@ -498,6 +499,9 @@ public:
                 setString(result, simulateGanttRightClick(doubleArg(params, 0), doubleArg(params, 1), stringArg(params, 2, true)));
                 return S_OK;
             case kGanttHover: setString(result, simulateGanttHover(doubleArg(params, 0), doubleArg(params, 1))); return S_OK;
+            case kGanttEditCell:
+                setString(result, simulateGanttEditCell(doubleArg(params, 0), doubleArg(params, 1), stringArg(params, 2, true)));
+                return S_OK;
             case kGanttToolbar: setString(result, ganttToolbarText(app_.Get(), hitArg(app_.Get(), params, 0))); return S_OK;
             case kGanttHit: setString(result, hitText(ganttHitAtPoint(app_.Get(), doubleArg(params, 0), doubleArg(params, 1)))); return S_OK;
             case kOpenCalendar: openGanttCalendar(app_.Get(), narrow(stringArg(params, 0, true))); return S_OK;
