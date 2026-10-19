@@ -7,9 +7,9 @@
 
         <group id="rethinkGroupStructure" label="Struktur">
           <box id="rethinkStructureCol" boxStyle="vertical">
-            <control idMso="SlideNewGallery"/>
-            <control idMso="PasteMenu"/>
-            <control idMso="FormatPainter"/>
+            <control idMso="SlideNewGallery" label="Neue Folie"/>
+            <control idMso="PasteMenu" label="Einfügen"/>
+            <control idMso="FormatPainter" label="Format übertragen"/>
           </box>
           <menu id="rethinkAgenda" label="Agenda" size="large" getImage="RethinkImage" tag="icon:agenda"
                 screentip="Agenda" supertip="Agenda-Folien einfügen und aktualisieren – geplant.">
@@ -72,7 +72,7 @@
                     screentip="Tabelle" supertip="Fügt eine Tabelle ein."/>
             <menu id="rethinkShapes" label="Formen" getImage="RethinkImage" tag="icon:shapes"
                   screentip="Formen" supertip="Formen aus dem PowerPoint-Katalog einfügen.">
-              <control idMso="ShapesInsertGallery"/>
+              <control idMso="ShapesInsertGallery" label="Formen"/>
             </menu>
             <menu id="rethinkImages" label="Bilder" getImage="RethinkImage" tag="icon:images"
                   screentip="Bilder" supertip="Bilder einfügen.">
@@ -111,10 +111,8 @@
         <group id="rethinkGroupText" label="Text">
           <box id="rethinkTextRows" boxStyle="vertical">
             <box id="rethinkTextRow1" boxStyle="horizontal">
-              <control idMso="Font"/>
-              <control idMso="FontSize"/>
-              <button id="rethinkAutofit" label="Text einpassen" showLabel="false" enabled="false" getImage="RethinkImage" tag="icon:autofit"
-                      screentip="Text einpassen" supertip="Schrift automatisch an die Form anpassen – geplant."/>
+              <control idMso="Font" showLabel="false"/>
+              <control idMso="FontSize" showLabel="false"/>
             </box>
             <box id="rethinkTextRow2" boxStyle="horizontal">
               <control idMso="Bold" showLabel="false"/>
@@ -122,10 +120,6 @@
               <control idMso="Underline" showLabel="false"/>
               <control idMso="Subscript" showLabel="false"/>
               <control idMso="Superscript" showLabel="false"/>
-              <menu id="rethinkMargins" label="Textabstände" showLabel="false" enabled="false" getImage="RethinkImage" tag="icon:margins"
-                    screentip="Textabstände" supertip="Innenabstände der Form – geplant.">
-                <button id="rethinkMarginsNone" label="Textabstände (geplant)" enabled="false" supertip="Noch nicht umgesetzt."/>
-              </menu>
             </box>
             <box id="rethinkTextRow3" boxStyle="horizontal">
               <control idMso="AlignLeft" showLabel="false"/>
@@ -135,31 +129,37 @@
               <control idMso="IndentIncrease" showLabel="false"/>
             </box>
           </box>
-          <box id="rethinkTextList" boxStyle="vertical">
+          <box id="rethinkTextColA" boxStyle="vertical">
+            <button id="rethinkAutofit" label="Text einpassen" showLabel="false" enabled="false" getImage="RethinkImage" tag="icon:autofit"
+                    screentip="Text einpassen" supertip="Schrift automatisch an die Form anpassen – geplant."/>
+            <menu id="rethinkMargins" label="Textabstände" showLabel="false" getImage="RethinkImage" tag="icon:margins"
+                  screentip="Textabstände" supertip="Innenabstände der Form – geplant.">
+              <button id="rethinkMarginsNone" label="Textabstände (geplant)" enabled="false" supertip="Noch nicht umgesetzt."/>
+            </menu>
+            <control idMso="LineSpacingGalleryPowerPoint" showLabel="false"/>
+          </box>
+          <box id="rethinkTextColB" boxStyle="vertical">
             <control idMso="BulletsGallery" showLabel="false"/>
             <control idMso="NumberingGallery" showLabel="false"/>
-            <box id="rethinkTextRow6" boxStyle="horizontal">
-              <control idMso="LineSpacingGalleryPowerPoint" showLabel="false"/>
-              <button id="rethinkParagraph" label="Absatz" showLabel="false" onAction="RethinkMso" getImage="RethinkImage"
-                      tag="icon:paragraph|mso:ParagraphDialog"
-                      screentip="Absatz" supertip="Öffnet den Absatzdialog."/>
-            </box>
+            <button id="rethinkParagraph" label="Absatz" showLabel="false" onAction="RethinkMso" getImage="RethinkImage"
+                    tag="icon:paragraph|mso:ParagraphDialog"
+                    screentip="Absatz" supertip="Öffnet den Absatzdialog."/>
           </box>
         </group>
 
         <group id="rethinkGroupLayout" label=" ">
           <menu id="rethinkLayout" label="Layout" size="large" getImage="RethinkImage" tag="icon:layout"
                 screentip="Layout" supertip="Markierte Formen ausrichten und verteilen.">
-            <control idMso="ObjectsAlignLeftSmart"/>
-            <control idMso="ObjectsAlignCenterHorizontalSmart"/>
-            <control idMso="ObjectsAlignRightSmart"/>
+            <control idMso="ObjectsAlignLeftSmart" label="Links ausrichten"/>
+            <control idMso="ObjectsAlignCenterHorizontalSmart" label="Horizontal zentrieren"/>
+            <control idMso="ObjectsAlignRightSmart" label="Rechts ausrichten"/>
             <menuSeparator id="rethinkLayoutSep1"/>
-            <control idMso="ObjectsAlignTopSmart"/>
-            <control idMso="ObjectsAlignMiddleVerticalSmart"/>
-            <control idMso="ObjectsAlignBottomSmart"/>
+            <control idMso="ObjectsAlignTopSmart" label="Oben ausrichten"/>
+            <control idMso="ObjectsAlignMiddleVerticalSmart" label="Vertikal zentrieren"/>
+            <control idMso="ObjectsAlignBottomSmart" label="Unten ausrichten"/>
             <menuSeparator id="rethinkLayoutSep2"/>
-            <control idMso="AlignDistributeHorizontally"/>
-            <control idMso="AlignDistributeVertically"/>
+            <control idMso="AlignDistributeHorizontally" label="Horizontal verteilen"/>
+            <control idMso="AlignDistributeVertically" label="Vertikal verteilen"/>
           </menu>
         </group>
 

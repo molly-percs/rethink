@@ -20,7 +20,7 @@ namespace {
 using namespace Gdiplus;
 
 // Palette des Tabs (ARGB)
-const Color kBlue(255, 0x25, 0x78, 0xEB), kDark(255, 0x1B, 0x5C, 0xB8), kLight(255, 0xCF, 0xE0, 0xFB), kInk(255, 0x40, 0x40, 0x40),
+const Color kBlue(255, 0x25, 0x78, 0xEB), kDark(255, 0x1B, 0x5C, 0xB8), kLight(255, 0xCF, 0xE0, 0xFB), kInk(255, 0x6A, 0x6A, 0x6A),
     kGrey(255, 0x8A, 0x8A, 0x8A), kWhite(255, 255, 255, 255), kGreen(255, 0x2E, 0x9E, 0x5B), kOrange(255, 0xE8, 0x83, 0x3A);
 
 // Zeichner: alle Symbole sind auf einem 16x16-Raster entworfen; die Graphics-Skalierung bringt sie auf 16/32 px (mal DPI),
@@ -106,11 +106,14 @@ using Drawing = void (*)(Pen2D&);
 // Tabelle id -> Zeichnung. Große Symbole (Gruppenköpfe) zuerst, danach die kleinen Zeilen-Symbole.
 const std::unordered_map<std::wstring, Drawing>& drawings() {
     static const std::unordered_map<std::wstring, Drawing> t = {
-        {L"agenda", [](Pen2D& d) {
+        {L"agenda", [](Pen2D& d) {  // Folie mit Inhaltsverzeichnis, die mittlere (aktuelle) Zeile hervorgehoben
+             d.frame(kGrey, 1.5f, 1.5f, 13, 13, 1, 1, kWhite);
+             d.fill(kLight, 2, 6.5f, 12, 3);
              for (int i = 0; i < 3; ++i) {
-                 const REAL y = 1.5f + i * 5;
-                 d.fill(kBlue, 1, y, 4, 3.5f, 0.8f);
-                 d.line(kGrey, 7, y + 1.75f, 15, y + 1.75f, 1.6f);
+                 const REAL y = 4.5f + i * 3.5f;
+                 const bool now = i == 1;
+                 d.disc(now ? kBlue : kGrey, 4.5f, y, 0.9f);
+                 d.line(now ? kDark : kGrey, 7, y, 12, y, now ? 1.5f : 1);
              }
          }},
         {L"library", [](Pen2D& d) {
@@ -221,10 +224,10 @@ const std::unordered_map<std::wstring, Drawing>& drawings() {
              d.poly(kBlue, {{0.8f, 6.5f}, {5, 6.5f}, {5, 4.5f}, {9, 8.5f}, {5, 12.5f}, {5, 10.5f}, {0.8f, 10.5f}}, kWhite, 1);
          }},
         {L"refresh", [](Pen2D& d) {
-             Pen pen(kBlue, 1.9f);
+             Pen pen(kBlue, 1.3f);
              d.g.DrawArc(&pen, 2.5f, 2.5f, 11.0f, 11.0f, 35.0f, 280.0f);
              const REAL a = -45 * 3.14159265f / 180, c = std::cos(a), s = std::sin(a);  // Bogenende bei -45 Grad, im Uhrzeigersinn
-             d.head(kBlue, 8 + 5.5f * c - s * 2.6f, 8 + 5.5f * s + c * 2.6f, -s, c, 2.6f, 2.8f);
+             d.head(kBlue, 8 + 5.5f * c - s * 2.4f, 8 + 5.5f * s + c * 2.4f, -s, c, 2.4f, 2.4f);
          }},
         {L"link", [](Pen2D& d) {
              GraphicsPath p(FillModeAlternate);
@@ -264,10 +267,14 @@ const std::unordered_map<std::wstring, Drawing>& drawings() {
              d.g.DrawRectangle(&pen, 4.5f, 4.5f, 7.0f, 7.0f);
          }},
         {L"paragraph", [](Pen2D& d) {
-             d.pie(kInk, 2.5f, 1.5f, 11, 9, 90, 180);
-             d.fill(kInk, 8, 1.5f, 1.8f, 13);
-             d.fill(kInk, 11.2f, 1.5f, 1.8f, 13);
-             d.fill(kInk, 8, 1.5f, 5, 1.6f);
+             GraphicsPath p;  // Bogen und Hauptlinien auf halben Einheiten, damit 1-Einheit-Striche ganze Pixel treffen
+             p.AddLine(11.5f, 2.5f, 8.5f, 2.5f);
+             p.AddArc(4.5f, 2.5f, 8.0f, 7.0f, 270, -180);
+             p.AddLine(8.5f, 9.5f, 11.5f, 9.5f);
+             Pen pen(kInk, 1.0f);
+             d.g.DrawPath(&pen, &p);
+             d.line(kInk, 8.5f, 2, 8.5f, 14.5f);
+             d.line(kInk, 11.5f, 2, 11.5f, 14.5f);
          }},
     };
     return t;
